@@ -79,7 +79,7 @@ jobs:
   prepare-toolchain:
     name: 准备工具链
     needs: generate-hashes
-    runs-on: ubuntu-${{ github.event.inputs.ubuntu_version || '22.04' }
+    runs-on: ubuntu-${{ github.event.inputs.ubuntu_version || '22.04' }}
     outputs:
       cache-hit: ${{ steps.cache.outputs.cache-hit }}
       toolchain-ready: ${{ steps.prepare.outputs.toolchain-ready }}
