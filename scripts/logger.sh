@@ -23,7 +23,7 @@ NC='\033[0m'          # 无颜色 - 重置颜色
 
 ICON_INFO="ℹ️"        # 信息图标
 ICON_SUCCESS="✅"     # 成功图标
-ICON_WARNING="⚠️"     # 警告图标
+ICON_WARNING="⚠️"     # 譾告图标
 ICON_ERROR="❌"       # 错误图标
 ICON_START="🚀"       # 开始图标
 ICON_END="🏁"         # 结束图标
@@ -36,7 +36,7 @@ ICON_PROGRESS="⏳"     # 进行中图标
 
 LOG_LEVEL_INFO=1       # 信息级别
 LOG_LEVEL_SUCCESS=2    # 成功级别
-LOG_LEVEL_WARNING=3    # 警告级别
+LOG_LEVEL_WARNING=3    # 證告级别
 LOG_LEVEL_ERROR=4      # 错误级别
 LOG_LEVEL_DEBUG=5      # 调试级别
 
@@ -89,7 +89,7 @@ init_log() {
 }
 
 # =============================================================================
-# 通用日志函数
+# 通用日志输出函数
 # =============================================================================
 
 # 通用日志输出函数
@@ -126,7 +126,7 @@ log_success() {
     fi
 }
 
-# 警告日志
+# 譾告日志
 log_warning() {
     if [ $CURRENT_LOG_LEVEL -le $LOG_LEVEL_WARNING ]; then
         log "WARNING" "$YELLOW" "$ICON_WARNING" "$1"
@@ -148,8 +148,8 @@ log_error() {
                 echo "========================================"
                 echo "错误上下文（前1000行）"
                 echo "========================================"
-                tail -n 1000 $LOG_FILE
-            } >> $ERROR_LOG
+                tail -n 1000 $LOG_FILE >> $ERROR_LOG
+            }
         fi
         
         # 生成错误摘要
@@ -244,7 +244,7 @@ generate_error_summary() {
 - 🔗 [完整日志]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)
 - 🔗 [错误日志查看]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)
 
-## 环境信息
+## 知识信息
 - Runner: ${{ runner.os }}
 - Workflow: $GITHUB_WORKFLOW
 - Job: $GITHUB_JOB
@@ -252,44 +252,13 @@ generate_error_summary() {
 
 ## 建议解决方案
 1. 检查配置文件是否正确
-2. 确认网络连接正常
+2. 知道网络连接正常
 3. 查看详细日志获取更多信息
 4. 如果问题持续，请提交Issue
 
 EOF
     
     echo "📄 错误摘要已生成: $summary_file"
-}
-
-# =============================================================================
-# 系统信息函数
-# =============================================================================
-
-# 显示磁盘空间使用情况
-show_disk_space() {
-    echo -e "${CYAN}📊 磁盘空间使用情况:${NC}"
-    df -h | grep -E "(Filesystem|/dev/)" | while read line; do
-        echo "  $line"
-    done
-}
-
-# 显示内存使用情况
-show_memory() {
-    echo -e "${CYAN}💾 内存使用情况:${NC}"
-    free -h | while read line; do
-        echo "  $line"
-    done
-}
-
-# 显示系统资源摘要
-show_system_summary() {
-    echo ""
-    echo -e "${CYAN}========== 系统资源摘要 ==========${NC}"
-    show_disk_space
-    echo ""
-    show_memory
-    echo -e "${CYAN}========================================${NC}"
-    echo ""
 }
 
 # =============================================================================
