@@ -151,7 +151,7 @@ safe_remove() {
     local path="$1"
     
     # 安全检查
-    if [ -n "$path" ] && [ "$path" != "/" ] && [[ "$path" == *"/"*" ]]; then
+    if [ -n "$path" ] && [ "$path" != "/" ] && [[ "$path" == *"/"* ]]; then
         rm -rf "$path"
         echo "🗑️ 已删除: $path"
         return 0
@@ -400,7 +400,7 @@ show_progress() {
     done
     
     # 输出进度条
-    printf "\r${ICON_PROGRESS} %s [%s] %d%% (%d/%d)" "$description" "$bar" "$percentage" "$current" "$total"
+    printf "\r⏳ %s [%s] %d%% (%d/%d)" "$description" "$bar" "$percentage" "$current" "$total"
     
     # 如果完成，换行
     if [ $current -eq $total ]; then
