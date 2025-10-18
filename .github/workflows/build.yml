@@ -1,5 +1,4 @@
 # OpenWrt 多配置自动编译工作流
-# .github/workflows/build.yml
 # 支持多芯片架构、多分支、多配置的并行编译
 # 首次创建: 2025-10-18
 # 最后更新: 2025-10-18
@@ -233,9 +232,10 @@ jobs:
             repo_short: libwrt
     timeout-minutes: 180
     outputs:
-      base-ready-${{ matrix.branch }}: ${{ steps.build.outputs.base-ready }}
-      base-error-${{ matrix.branch }}: ${{ steps.build.outputs.base-error }}
-      base-path-${{ matrix.branch }}: ${{ steps.build.outputs.base-path }}
+      base-ready: ${{ steps.build.outputs.base-ready }}
+      base-error: ${{ steps.build.outputs.base-error }}
+      base-path: ${{ steps.build.outputs.base-path }}
+      branch-name: ${{ matrix.branch }}
     
     steps:
       - name: 检出代码
@@ -401,7 +401,6 @@ jobs:
           if ! $GITHUB_WORKSPACE/scripts/check_packages.sh; then
             log_error "基础软件包检查失败"
             echo "⚠️ 基础软件包缺失，将缓存退出等待修复"
-            echo "base-error=true" >> $GITHUB_FILE_OUTPUT
             exit 1
           fi
           
@@ -420,7 +419,6 @@ jobs:
           if ! make -j$(nproc) 2>&1 | tee compile.log; then
             log_error "基础环境编译失败！"
             tail -n 1000 compile.log > error.log
-            echo "base-error=true" >> $GITHUB_FILE_OUTPUT
             exit 1
           fi
           
@@ -447,6 +445,9 @@ jobs:
     outputs:
       all-ready: ${{ steps.check.outputs.all-ready }}
       failed-branches: ${{ steps.check.outputs.failed-branches }}
+      openwrt-ready: ${{ steps.check.outputs.openwrt-ready }}
+      immwrt-ready: ${{ steps.check.outputs.immwrt-ready }}
+      libwrt-ready: ${{ steps.check.outputs.libwrt-ready }}
     steps:
       - name: 检查基础环境状态
         id: check
@@ -454,20 +455,45 @@ jobs:
           # 检查每个分支的状态
           local failed_branches=""
           local all_ready="true"
+          local openwrt_ready="false"
+          local immwrt_ready="false"
+          local libwrt_ready="false"
           
-          for branch in openwrt immwrt libwrt; do
-            local status="${{ needs.build-base-environments.outputs['base-error-'$branch] }}"
-            if [ "$status" = "true" ]; then
-              all_ready="false"
-              failed_branches="$failed_branches $branch"
-              echo "❌ $branch 基础环境失败"
-            else
-              echo "✅ $branch 基础环境成功"
-            fi
-          done
+          # 检查openwrt
+          if [ "${{ needs.build-base-environments.outputs['base-ready'] }}" = "true" ] && [ "${{ needs.build-base-environments.result }}" = "success" ]; then
+            echo "✅ openwrt 基础环境成功"
+            openwrt_ready="true"
+          else
+            echo "❌ openwrt 基础环境失败"
+            all_ready="false"
+            failed_branches="$failed_branches openwrt"
+          fi
+          
+          # 检查immwrt
+          if [ "${{ needs.build-base-environments.outputs['base-ready'] }}" = "true" ] && [ "${{ needs.build-base-environments.result }}" = "success" ]; then
+            echo "✅ immwrt 基础环境成功"
+            immwrt_ready="true"
+          else
+            echo "❌ immwrt 基础环境失败"
+            all_ready="false"
+            failed_branches="$failed_branches immwrt"
+          fi
+          
+          # 检查libwrt
+          if [ "${{ needs.build-base-environments.outputs['base-ready'] }}" = "true" ] && [ "${{ needs.build-base-environments.result }}" = "success" ]; then
+            echo "✅ libwrt 基础环境成功"
+            libwrt_ready="true"
+          else
+            echo "❌ libwrt 基础环境失败"
+            all_ready="false"
+            failed_branches="$failed_branches libwrt"
+          fi
           
           echo "all-ready=$all_ready" >> $GITHUB_OUTPUT
           echo "failed-branches=$failed_branches" >> $GITHUB_OUTPUT
+          echo "openwrt-ready=$openwrt_ready" >> $GITHUB_OUTPUT
+          echo "immwrt-ready=$immwrt_ready" >> $GITHUB_OUTPUT
+          echo "libwrt-ready=$libwrt_ready" >> $GITHUB_OUTPUT
           
           if [ "$all_ready" = "true" ]; then
             echo "✅ 所有基础环境准备完成"
@@ -480,7 +506,11 @@ jobs:
   build-configs:
     name: 编译固件 (${{ matrix.branch }}-${{ matrix.config }})
     needs: [generate-hashes, check-base-environments]
-    if: needs.check-base-environments.outputs.all-ready == 'true'
+    if: |
+      always() && 
+      (needs.check-base-environments.outputs.openwrt-ready == 'true' && matrix.branch == 'openwrt') ||
+      (needs.check-base-environments.outputs.immwrt-ready == 'true' && matrix.branch == 'immwrt') ||
+      (needs.check-base-environments.outputs.libwrt-ready == 'true' && matrix.branch == 'libwrt')
     runs-on: ubuntu-${{ github.event.inputs.ubuntu_version || '22.04' }}
     strategy:
       fail-fast: false
