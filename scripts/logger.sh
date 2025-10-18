@@ -1,7 +1,7 @@
 #!/bin/bash
 # 日志模块 - 提供统一的日志输出格式和错误处理
 # 作者: Mary
-# 最后更新: 2024-01-XX
+# 最后更新: 2025-10-18
 
 # =============================================================================
 # 颜色定义 - 用于控制台输出的颜色控制
@@ -241,8 +241,8 @@ generate_error_summary() {
  $(date '+%Y-%m-%d %H:%M:%S')
 
 ## 详细日志
-- [完整日志]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)
-- [错误日志查看]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)
+- 🔗 [完整日志]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)
+- 🔗 [错误日志查看]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)
 
 ## 环境信息
 - Runner: ${{ runner.os }}
