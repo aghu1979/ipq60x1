@@ -592,7 +592,7 @@ jobs:
       - name: 下载基础环境
         uses: actions/download-artifact@v4
         with:
-          name: base-env-${{ matrix.branch }
+          name: base-env-${{ matrix.branch }}
           path: $GITHUB_WORKSPACE/base_env_${{ matrix.branch }}
 
       - name: 设置编译环境
