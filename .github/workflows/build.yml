@@ -234,6 +234,14 @@ jobs:
 
       - name: 清理磁盘空间
         uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          docker-images: true
+          large-packages: true
+          swap-storage: true
 
       - name: 恢复工具链缓存
         uses: actions/cache@v3
@@ -359,7 +367,7 @@ jobs:
           # 提取设备列表
           echo "🔍 提取设备列表..."
           local devices=$(grep "CONFIG_TARGET_DEVICE_.*_DEVICE_.*=y" .config | \
-                         sed 's/.*_DEVICE_\(.*\)=y/\1' | \
+                         sed 's/.*_DEVICE_\(.*\)=y/\1/' | \
                          sort -u)
           
           local device_count=$(echo "$devices" | wc -l)
@@ -443,12 +451,12 @@ jobs:
       - name: 检查基础环境状态
         id: check
         run: |
-          # 检查每个分支的状态
-          local failed_branches=""
-          local all_ready="true"
-          local openwrt_ready="false"
-          local immwrt_ready="false"
-          local libwrt_ready="false"
+          # 初始化变量
+          failed_branches=""
+          all_ready="true"
+          openwrt_ready="false"
+          immwrt_ready="false"
+          libwrt_ready="false"
           
           # 检查openwrt
           if [ "${{ needs.build-base-environments.result }}" = "success" ]; then
@@ -480,17 +488,33 @@ jobs:
             failed_branches="$failed_branches libwrt"
           fi
           
+          # 输出结果
           echo "all-ready=$all_ready" >> $GITHUB_OUTPUT
           echo "failed-branches=$failed_branches" >> $GITHUB_OUTPUT
           echo "openwrt-ready=$openwrt_ready" >> $GITHUB_OUTPUT
           echo "immwrt-ready=$immwrt_ready" >> $GITHUB_OUTPUT
           echo "libwrt-ready=$libwrt_ready" >> $GITHUB_OUTPUT
           
+          # 显示状态摘要
           if [ "$all_ready" = "true" ]; then
             echo "✅ 所有基础环境准备完成"
           else
             echo "❌ 以下基础环境失败: $failed_branches"
             echo "⚠️ 将缓存退出，等待用户修复软件包问题"
+            echo ""
+            echo "📋 错误详情和修复建议："
+            echo "1. 查看失败的构建日志："
+            echo "   🔗 [查看日志]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+            echo ""
+            echo "2. 常见问题："
+            echo "   - 软件包依赖缺失"
+            echo "   - 网络连接问题"
+            echo "   - 配置文件错误"
+            echo ""
+            echo "3. 修复方法："
+            echo "   - 检查 configs/ 目录中的配置文件"
+            echo "   - 确认网络连接正常"
+            echo "   - 更新软件源"
           fi
 
   # 阶段4：并行编译9个软件配置
@@ -551,6 +575,14 @@ jobs:
 
       - name: 清理磁盘空间
         uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          docker-images: true
+          large-packages: true
+          swap-storage: true
 
       - name: 恢复工具链缓存
         uses: actions/cache@v3
