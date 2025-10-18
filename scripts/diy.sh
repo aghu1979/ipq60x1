@@ -1,267 +1,184 @@
 #!/bin/bash
-# DIY脚本 - 配置第三方源及设备初始设置
-# 作者: Mary
-# 最后更新: 2025-10-18
+# ==============================================================================
+# 用户自定义脚本
+# 功能: 在编译前对 OpenWrt 源码进行自定义修改。
+#       此脚本将在 OpenWrt 源码根目录下执行。
+#
+# 优化点:
+# 1. 集成了统一的日志系统，所有输出格式化并记录。
+# 2. 采用严格模式 (`set -euo pipefail`)，任何命令失败都会立即终止。
+# 3. 功能模块化，每个操作封装为独立函数，结构清晰。
+# 4. 增加了健壮性检查，操作前会验证文件/目录是否存在。
+# 5. 提供了详细的中文注释，易于理解和维护。
+# ==============================================================================
 
-# 启用严格模式
+# 设置严格模式：遇到错误或未定义变量时立即退出
 set -euo pipefail
 
-# 导入日志模块
-source ./scripts/logger.sh
+# 引入日志模块 (假设 logger.sh 在同一目录或可访问路径)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 检查 logger.sh 是否存在
+if [[ ! -f "$SCRIPT_DIR/logger.sh" ]]; then
+    echo -e "\033[0;31m❌ [ERROR]${NC} logger.sh 未找到，请确保其在 scripts 目录下。"
+    exit 1
+fi
+source "$SCRIPT_DIR/logger.sh"
 
-# =============================================================================
-# 主逻辑
-# =============================================================================
+# ==============================================================================
+# 配置区域 - 在此修改您的自定义设置
+# ==============================================================================
 
-# 主函数
-# 参数: $1=分支名称, $2=SoC名称
-main() {
-    # 接收参数
-    local branch_name="${1:-openwrt}"
-    local soc_name="${2:-ipq60xx}"
-    
-    # 开始步骤
-    step_start "DIY配置: $branch_name-$soc_name"
-    
-    # 显示配置信息
-    echo "=========================================="
-    echo " DIY Script for OpenWrt"
-    echo " Branch: ${branch_name}"
-    echo " SoC:     ${soc_name}"
-    echo "=========================================="
-    
-    # 步骤 1: 修改默认设置
-    log_info "修改默认IP、主机名和编译署名..."
-    
-    # 修改默认IP
-    if grep -q "192.168.1.1" package/base-files/files/bin/config_generate; then
-        sed -i 's/192.168.1.1/192.168.111.1/g' package/base-files/files/bin/config_generate
-        log_success "默认IP已修改为: 192.168.111.1"
-    fi
-    
-    # 修改主机名
-    if grep -q "hostname=" package/base-files/files/bin/config_generate; then
-        sed -i "s/hostname='.*'/hostname='WRT'/g" package/base-files/files/bin/config_generate
-        log_success "主机名已修改为: WRT"
-    fi
-    
-    # 添加编译署名
-    local status_file="feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js"
-    if [ -f "$status_file" ]; then
-        sed -i "s/(\(luciversion || ''\))/(\1) + (' \/ Built by Mary')/g" "$status_file"
-        log_success "编译署名已添加"
-    else
-        log_warning "状态文件不存在，跳过署名添加"
-    fi
-    
-    # 步骤 2: 预删除官方软件源缓存
-    log_info "预删除官方软件源缓存..."
-    
-    # 定义需要删除的官方缓存包
-    local official_cache_packages=(
-        "package/feeds/packages/golang"
-        "package/feeds/packages/ariang"
-        "package/feeds/packages/frp"
-        "package/feeds/packages/adguardhome"
-        "package/feeds/packages/wolplus"
-        "package/feeds/packages/lucky"
-        "package/feeds/packages/wechatpush"
-        "package/feeds/packages/open-app-filter"
-        "package/feeds/packages/gecoosac"
-        "package/feeds/luci/luci-app-frpc"
-        "package/feeds/luci/luci-app-frps"
-        "package/feeds/luci/luci-app-adguardhome"
-        "package/feeds/luci/luci-app-wolplus"
-        "package/feeds/luci/luci-app-lucky"
-        "package/feeds/luci/luci-app-wechatpush"
-        "package/feeds/luci/luci-app-athena-led"
-        "package/feeds/packages/netspeedtest"
-        "package/feeds/packages/partexp"
-        "package/feeds/packages/taskplan"
-        "package/feeds/packages/tailscale"
-        "package/feeds/packages/momo"
-        "package/feeds/packages/nikki"
-        "package/feeds/luci/luci-app-netspeedtest"
-        "package/feeds/luci/luci-app-partexp"
-        "package/feeds/luci/luci-app-taskplan"
-        "package/feeds/luci/luci-app-tailscale"
-        "package/feeds/luci/luci-app-momo"
-        "package/feeds/luci/luci-app-nikki"
-        "package/feeds/luci/luci-app-openclash"
-    )
-    
-    # 删除缓存包
-    local deleted_count=0
-    for package in "${official_cache_packages[@]}"; do
-        if [ -d "$package" ]; then
-            rm -rf "$package"
-            ((deleted_count++))
-            echo "  🗑️ 已删除: $package"
-        fi
-    done
-    log_success "删除了 $deleted_count 个缓存包"
-    
-    # 步骤 3: 预删除feeds工作目录
-    log_info "预删除feeds工作目录..."
-    
-    # 定义需要删除的feeds工作包
-    local feeds_work_packages=(
-        "feeds/packages/lang/golang"
-        "feeds/packages/net/ariang"
-        "feeds/packages/net/frp"
-        "feeds/packages/net/adguardhome"
-        "feeds/packages/net/wolplus"
-        "feeds/packages/net/lucky"
-        "feeds/packages/net/wechatpush"
-        "feeds/packages/net/open-app-filter"
-        "feeds/packages/net/gecoosac"
-        "feeds/luci/applications/luci-app-frpc"
-        "feeds/luci/applications/luci-app-frps"
-        "feeds/luci/applications/luci-app-adguardhome"
-        "feeds/luci/applications/luci-app-wolplus"
-        "feeds/luci/applications/luci-app-lucky"
-        "feeds/luci/applications/luci-app-wechatpush"
-        "feeds/luci/applications/luci-app-athena-led"
-        "feeds/packages/net/netspeedtest"
-        "feeds/packages/utils/partexp"
-        "feeds/packages/utils/taskplan"
-        "feeds/packages/net/tailscale"
-        "feeds/packages/net/momo"
-        "feeds/packages/net/nikki"
-        "feeds/luci/applications/luci-app-netspeedtest"
-        "feeds/luci/applications/luci-app-partexp"
-        "feeds/luci/applications/luci-app-taskplan"
-        "feeds/luci/applications/luci-app-tailscale"
-        "feeds/luci/applications/luci-app-momo"
-        "feeds/luci/applications/luci-app-nikki"
-        "feeds/luci/applications/luci-app-openclash"
-    )
-    
-    # 删除工作目录包
-    deleted_count=0
-    for package in "${feeds_work_packages[@]}"; do
-        if [ -d "$package" ]; then
-            rm -rf "$package"
-            ((deleted_count++))
-            echo "  🗑️ 已删除: $package"
-        fi
-    done
-    log_success "删除了 $deleted_count 个工作目录包"
-    
-    # 步骤 4: 克隆定制化软件包
-    log_info "克隆定制化软件包..."
-    
-    # 创建必要的目录
-    mkdir -p feeds/packages/lang
-    mkdir -p feeds/packages/net
-    mkdir -p feeds/luci/applications
-    mkdir -p package
-    
-    # 定义克隆命令
-    local clone_commands=(
-        "git clone --depth=1 https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang"
-        "git clone --depth=1 https://github.com/sbwml/luci-app-openlist2 package/openlist"
-        "git clone --depth=1 https://github.com/laipeng668/packages.git feeds/packages/net/ariang"
-        "git clone --depth=1 https://github.com/laipeng668/packages.git feeds/packages/net/frp"
-        "git clone --depth=1 https://github.com/laipeng668/luci.git feeds/luci/applications/luci-app-frpc"
-        "git clone --depth=1 https://github.com/laipeng668/luci.git feeds/luci/applications/luci-app-frps"
-        "git clone --depth=1 https://github.com/kenzok8/openwrt-packages.git package/adguardhome"
-        "git clone --depth=1 https://github.com/kenzok8/openwrt-packages.git package/luci-app-adguardhome"
-        "git clone --depth=1 https://github.com/VIKINGYFY/packages.git feeds/luci/applications/luci-app-wolplus"
-        "git clone --depth=1 https://github.com/tty228/luci-app-wechatpush.git package/luci-app-wechatpush"
-        "git clone --depth=1 https://github.com/destan19/OpenAppFilter.git package/OpenAppFilter"
-        "git clone --depth=1 https://github.com/lwb1978/openwrt-gecoosac.git package/openwrt-gecoosac"
-        "git clone --depth=1 https://github.com/NONGFAH/luci-app-athena-led.git package/luci-app-athena-led"
-        "git clone --depth=1 https://github.com/sirpdboy/luci-app-netspeedtest.git package/netspeedtest"
-        "git clone --depth=1 https://github.com/sirpdboy/luci-app-partexp.git package/partexp"
-        "git clone --depth=1 https://github.com/sirpdboy/luci-app-taskplan.git package/taskplan"
-        "git clone --depth=1 https://github.com/tailscale/tailscale.git package/tailscale"
-        "git clone --depth=1 https://github.com/nikkinikki-org/OpenWrt-momo.git package/momo"
-        "git clone --depth=1 https://github.com/nikkinikki-org/OpenWrt-nikki.git package/nikki"
-        "git clone --depth=1 https://github.com/vernesong/OpenClash.git package/openclash"
-        "git clone --depth=1 https://github.com/kenzok8/small-package smpackage"
-    )
-    
-    # 执行克隆命令
-    local cloned_count=0
-    local failed_count=0
-    
-    for cmd in "${clone_commands[@]}"; do
-        echo "  📥 执行: $cmd"
-        if eval "$cmd" 2>/dev/null; then
-            ((cloned_count++))
-            echo "    ✅ 成功"
-        else
-            ((failed_count++))
-            echo "    ❌ 失败"
-            log_warning "克隆失败: $cmd"
-        fi
-    done
-    
-    log_success "克隆结果: 成功 $cloned_count 个，失败 $failed_count 个"
-    
-    # 步骤 5: 设置权限
-    log_info "设置文件权限..."
-    
-    # 设置athena-led权限
-    if [ -f "package/luci-app-athena-led/root/etc/init.d/athena_led" ]; then
-        chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led
-        echo "  ✅ athena_led init脚本权限已设置"
-    fi
-    
-    if [ -f "package/luci-app-athena-led/root/usr/sbin/athena-led" ]; then
-        chmod +x package/luci-app-athena-led/root/usr/sbin/athena-led
-        echo "  ✅ athena-led二进制权限已设置"
-    fi
-    
-    # 步骤 6: 验证克隆结果
-    log_info "验证克隆结果..."
-    
-    local verification_failed=0
-    
-    # 检查关键软件包
-    local critical_packages=(
-        "feeds/packages/lang/golang"
-        "package/openclash"
-        "package/luci-app-athena-led"
-        "package/netspeedtest"
-    )
-    
-    for pkg in "${critical_packages[@]}"; do
-        if [ ! -d "$pkg" ]; then
-            log_error "关键软件包缺失: $pkg"
-            ((verification_failed++))
-        fi
-    done
-    
-    if [ $verification_failed -gt 0 ]; then
-        log_error "验证失败，有 $verification_failed 个关键软件包缺失"
-    else
-        log_success "所有关键软件包验证通过"
-    fi
-    
-    # 结束步骤
-    step_end "DIY配置完成"
-    
-    # 显示摘要
-    echo ""
-    echo "📊 DIY配置摘要:"
-    echo "  - 删除缓存包: $deleted_count"
-    echo "  - 克隆软件包: $cloned_count"
-    echo "  - 失败数量: $failed_count"
-    echo "  - 验证失败: $verification_failed"
-    
-    # 返回结果
-    if [ $verification_failed -gt 0 ]; then
+# --- 网络设置 ---
+DEFAULT_LAN_IP="192.168.111.1"
+
+# --- WiFi 设置 ---
+DEFAULT_WIFI_SSID="OpenWrt"
+DEFAULT_WIFI_KEY="12345678"
+DEFAULT_WIFI_ENCRYPTION="psk2"
+
+# --- 第三方软件源 ---
+# 格式: "源名称 源地址"
+# 示例: "small https://github.com/kenzok8/small"
+CUSTOM_FEEDS=(
+    # "small https://github.com/kenzok8/small"
+)
+
+# --- 主题设置 ---
+# 如果您想使用不同的主题，可以在这里设置
+# 例如: "luci-theme-argon"
+CUSTOM_THEME=""
+
+# ==============================================================================
+# 函数定义区域
+# ==============================================================================
+
+# 函数: set_default_lan_ip
+# 描述: 修改默认的 LAN IP 地址。
+set_default_lan_ip() {
+    local config_generate_file="package/base-files/files/bin/config_generate"
+    step_start "设置默认 LAN IP 为 ${DEFAULT_LAN_IP}"
+
+    if [[ ! -f "$config_generate_file" ]]; then
+        log_error "文件 $config_generate_file 不存在，无法修改 LAN IP。"
         return 1
-    else
-        return 0
     fi
+
+    # 使用 -i.bak 创建备份，以防修改失败
+    sed -i.bak "s/192.168.1.1/${DEFAULT_LAN_IP}/g" "$config_generate_file"
+    log_success "已将默认 LAN IP 修改为 ${DEFAULT_LAN_IP}"
+    step_end "设置默认 LAN IP"
 }
 
-# =============================================================================
-# 脚本入口点
-# =============================================================================
+# 函数: set_default_wifi
+# 描述: 通过 uci-defaults 脚本设置默认的 WiFi SSID 和密码。
+set_default_wifi() {
+    step_start "设置默认 WiFi (SSID: ${DEFAULT_WIFI_SSID})"
+    local uci_defaults_dir="package/base-files/files/etc/uci-defaults"
+    local wifi_script="$uci_defaults_dir/99-custom-wifi"
 
-# 执行主函数
-main "$@"
+    # 确保目录存在
+    mkdir -p "$uci_defaults_dir"
+
+    # 创建或覆盖 uci-defaults 脚本
+    cat > "$wifi_script" << EOF
+#!/bin/sh
+# This script is executed at the first boot
+
+# Set WiFi SSID and Key for radio0 (usually 2.4GHz)
+uci set wireless.default_radio0.ssid='${DEFAULT_WIFI_SSID}'
+uci set wireless.default_radio0.key='${DEFAULT_WIFI_KEY}'
+uci set wireless.default_radio0.encryption='${DEFAULT_WIFI_ENCRYPTION}'
+
+# Set WiFi SSID and Key for radio1 (usually 5GHz), if it exists
+if uci -q get wireless.default_radio1 > /dev/null; then
+    uci set wireless.default_radio1.ssid='${DEFAULT_WIFI_SSID}_5G'
+    uci set wireless.default_radio1.key='${DEFAULT_WIFI_KEY}'
+    uci set wireless.default_radio1.encryption='${DEFAULT_WIFI_ENCRYPTION}'
+fi
+
+# Commit changes
+uci commit wireless
+
+# Restart wireless service to apply changes
+wifi reload
+EOF
+
+    chmod +x "$wifi_script"
+    log_success "已创建默认 WiFi 设置脚本。"
+    step_end "设置默认 WiFi"
+}
+
+# 函数: add_custom_feeds
+# 描述: 向 feeds.conf.default 添加自定义的第三方软件源。
+add_custom_feeds() {
+    if [[ ${#CUSTOM_FEEDS[@]} -eq 0 ]]; then
+        log_info "未配置自定义软件源，跳过此步骤。"
+        return 0
+    fi
+
+    step_start "添加自定义软件源"
+    local feeds_file="feeds.conf.default"
+
+    if [[ ! -f "$feeds_file" ]]; then
+        log_error "文件 $feeds_file 不存在，无法添加软件源。"
+        return 1
+    fi
+
+    for feed in "${CUSTOM_FEEDS[@]}"; do
+        # 读取 "源名称 源地址"
+        read -r name url <<< "$feed"
+        local feed_entry="src-git $name $url"
+
+        # 检查源是否已存在，避免重复添加
+        if grep -qF "$feed_entry" "$feeds_file"; then
+            log_warn "软件源已存在，跳过: $feed_entry"
+        else
+            echo "$feed_entry" >> "$feeds_file"
+            log_success "已添加软件源: $feed_entry"
+        fi
+    done
+
+    step_end "添加自定义软件源"
+}
+
+# 函数: apply_custom_theme
+# 描述: 设置默认的 LUCI 主题。
+apply_custom_theme() {
+    if [[ -z "$CUSTOM_THEME" ]]; then
+        log_info "未配置自定义主题，跳过此步骤。"
+        return 0
+    fi
+
+    step_start "设置默认主题为 ${CUSTOM_THEME}"
+    local uci_defaults_dir="package/base-files/files/etc/uci-defaults"
+    local theme_script="$uci_defaults_dir/98-custom-theme"
+
+    mkdir -p "$uci_defaults_dir"
+
+    cat > "$theme_script" << EOF
+#!/bin/sh
+# This script is executed at the first boot
+
+# Set the main theme
+uci set luci.main.mediaurlbase='/luci-static/${CUSTOM_THEME}'
+uci commit luci
+EOF
+
+    chmod +x "$theme_script"
+    log_success "已创建主题设置脚本，默认主题将设置为 ${CUSTOM_THEME}。"
+    step_end "设置默认主题"
+}
+
+# ==============================================================================
+# 主执行逻辑
+# ==============================================================================
+
+log_info "开始执行自定义脚本..."
+
+# 按顺序执行所有自定义操作
+set_default_lan_ip
+set_default_wifi
+add_custom_feeds
+apply_custom_theme
+
+log_success "所有自定义操作已成功完成！"
