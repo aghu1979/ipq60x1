@@ -1,3 +1,4 @@
+# .github/workflows/build.yml
 # OpenWrt 多配置自动编译工作流
 # 支持多芯片架构、多分支、多配置的并行编译
 # 首次创建: 2025-10-18
@@ -256,6 +257,8 @@ jobs:
             $GITHUB_WORKSPACE/toolchain/
             $GITHUB_WORKSPACE/.ccache
           key: toolchain-${{ needs.generate-hashes.outputs.cache-key }}-${{ env.CACHE_VERSION }}-${{ runner.os }}
+          restore-keys: |
+            toolchain--${{ env.CACHE_VERSION }}-${{ runner.os }}
 
       - name: 恢复基础环境缓存
         uses: actions/cache@v3
@@ -460,7 +463,7 @@ jobs:
           local libwrt_ready="false"
           
           # 检查openwrt
-          if [ "${{ needs.build-base-environments.outputs['base-ready'] }}" = "true" ] && [ "${{ needs.build-base-environments.result }}" = "success" ]; then
+          if [ "${{ needs.build-base-environments.result }}" = "success" ]; then
             echo "✅ openwrt 基础环境成功"
             openwrt_ready="true"
           else
@@ -470,7 +473,7 @@ jobs:
           fi
           
           # 检查immwrt
-          if [ "${{ needs.build-base-environments.outputs['base-ready'] }}" = "true" ] && [ "${{ needs.build-base-environments.result }}" = "success" ]; then
+          if [ "${{ needs.build-base-environments.result }}" = "success" ]; then
             echo "✅ immwrt 基础环境成功"
             immwrt_ready="true"
           else
@@ -480,7 +483,7 @@ jobs:
           fi
           
           # 检查libwrt
-          if [ "${{ needs.build-base-environments.outputs['base-ready'] }}" = "true" ] && [ "${{ needs.build-base-environments.result }}" = "success" ]; then
+          if [ "${{ needs.build-base-environments.result }}" = "success" ]; then
             echo "✅ libwrt 基础环境成功"
             libwrt_ready="true"
           else
@@ -506,11 +509,7 @@ jobs:
   build-configs:
     name: 编译固件 (${{ matrix.branch }}-${{ matrix.config }})
     needs: [generate-hashes, check-base-environments]
-    if: |
-      always() && 
-      (needs.check-base-environments.outputs.openwrt-ready == 'true' && matrix.branch == 'openwrt') ||
-      (needs.check-base-environments.outputs.immwrt-ready == 'true' && matrix.branch == 'immwrt') ||
-      (needs.check-base-environments.outputs.libwrt-ready == 'true' && matrix.branch == 'libwrt')
+    if: always() && needs.check-base-environments.outputs.all-ready == 'true'
     runs-on: ubuntu-${{ github.event.inputs.ubuntu_version || '22.04' }}
     strategy:
       fail-fast: false
@@ -522,17 +521,29 @@ jobs:
             repo_url: https://github.com/laipeng668/openwrt.git
             repo_branch: master
             repo_short: openwrt
+            should-run: ${{ needs.check-base-environments.outputs.openwrt-ready == 'true' }}
           - branch: immwrt
             repo_url: https://github.com/laipeng668/immortalwrt.git
             repo_branch: master
             repo_short: immwrt
+            should-run: ${{ needs.check-base-environments.outputs.immwrt-ready == 'true' }}
           - branch: libwrt
             repo_url: https://github.com/laipeng668/openwrt-6.x.git
             repo_branch: k6.12-nss
             repo_short: libwrt
+            should-run: ${{ needs.check-base-environments.outputs.libwrt-ready == 'true' }}
     timeout-minutes: 180
     
     steps:
+      - name: 检查是否应该运行
+        run: |
+          if [ "${{ matrix.should-run }}" != "true" ]; then
+            echo "❌ ${{ matrix.branch }} 基础环境未准备好，跳过编译"
+            exit 1
+          else
+            echo "✅ ${{ matrix.branch }} 基础环境已准备好，开始编译"
+          fi
+
       - name: 检出代码
         uses: actions/checkout@v4
 
