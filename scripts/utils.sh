@@ -74,8 +74,6 @@ extract_devices() {
     
     # 统计设备数量
     local device_count=$(echo "$devices" | wc -l)
-    
-    # 输出设备信息
     echo "🔍 检测到 $device_count 个设备:"
     echo "$devices" | while read device; do
         echo "  - $device"
@@ -151,7 +149,7 @@ safe_remove() {
     local path="$1"
     
     # 安全检查
-    if [ -n "$path" ] && [ "$path" != "/" ] && [[ "$path" == *"/"* ]]; then
+    if [ -n "$path" ] && [ "$path" != "/" ] && [[ "$path" == *"/"*" ]]; then
         rm -rf "$path"
         echo "🗑️ 已删除: $path"
         return 0
@@ -165,6 +163,9 @@ safe_remove() {
 # 参数: $1=源路径, $2=目标路径
 # 返回: 0=成功, 1=失败
 safe_symlink() {
+    local source $GITHUB_WORKSPACE/scripts/logger.sh
+    local source $GITHUB_WORKSPACE/scripts/utils.sh
+    
     local source="$1"
     local target="$2"
     
@@ -210,7 +211,7 @@ get_dir_size() {
 }
 
 # =============================================================================
-# 磁盘空间检查函数
+# 磀查磁盘空间
 # =============================================================================
 
 # 检查磁盘空间
@@ -400,7 +401,7 @@ show_progress() {
     done
     
     # 输出进度条
-    printf "\r⏳ %s [%s] %d%% (%d/%d)" "$description" "$bar" "$percentage" "$current" "$total"
+    printf "\r⏳ %s [%s] %d%% (%d/%d/%d/%d)" "$description" "$bar" "$percentage" "$current" "$total"
     
     # 如果完成，换行
     if [ $current -eq $total ]; then
