@@ -123,7 +123,7 @@ jobs:
 
       - name: 恢复工具链缓存
         id: cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             $GITHUB_WORKSPACE/dl/
@@ -161,15 +161,7 @@ jobs:
           
           chmod +x scripts/*.sh
           
-          # 执行DIY脚本
-          echo "🔧 执行DIY脚本..."
-          if ! ./scripts/diy.sh openwrt ipq60xx; then
-            log_error "DIY脚本执行失败"
-            echo "error-exit=true" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-          
-          # 更新feeds
+          # 更新feeds（不执行DIY脚本）
           echo "📦 更新feeds..."
           if ! ./scripts/feeds update -a; then
             log_error "feeds更新失败"
@@ -244,7 +236,7 @@ jobs:
           swap-storage: true
 
       - name: 恢复工具链缓存
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             $GITHUB_WORKSPACE/dl/
@@ -257,7 +249,7 @@ jobs:
           key: toolchain-${{ needs.generate-hashes.outputs.cache-key }}-${{ env.CACHE_VERSION }}-${{ runner.os }}
 
       - name: 恢复基础环境缓存
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             $GITHUB_WORKSPACE/base_env_${{ matrix.branch }}/
@@ -424,7 +416,7 @@ jobs:
           step_end "基础环境编译完成"
 
       - name: 上传基础环境
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: base-env-${{ matrix.branch }}
@@ -585,7 +577,7 @@ jobs:
           swap-storage: true
 
       - name: 恢复工具链缓存
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             $GITHUB_WORKSPACE/dl/
@@ -598,9 +590,9 @@ jobs:
           key: toolchain-${{ needs.generate-hashes.outputs.cache-key }}-${{ env.CACHE_VERSION }}-${{ runner.os }}
 
       - name: 下载基础环境
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
-          name: base-env-${{ matrix.branch }}
+          name: base-env-${{ matrix.branch }
           path: $GITHUB_WORKSPACE/base_env_${{ matrix.branch }}
 
       - name: 设置编译环境
@@ -741,7 +733,7 @@ jobs:
           step_end "产出物处理完成"
 
       - name: 上传构建产物
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: build-${{ matrix.branch }}-${{ matrix.config }}
@@ -761,7 +753,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 下载所有构建产物
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           path: $GITHUB_WORKSPACE/artifacts
 
@@ -795,7 +787,7 @@ jobs:
           step_end "发布准备完成"
 
       - name: 创建Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ipq60xx-$(date +%Y%m%d)
           body_path: $GITHUB_WORKSPACE/release_notes.md
