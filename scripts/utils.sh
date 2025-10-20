@@ -30,17 +30,18 @@ extract_devices() {
 
 # ==============================================================================
 # 函数: merge_configs
-# 描述: 按顺序合并多个配置文件，并格式化。
+# 描述: 按顺序合并多个配置文件，格式化，并严格检查 LUCI 软件包。
+#       如果 make defconfig 失败或 LUCI 包缺失，则终止脚本。
 # 参数: $@ - 配置文件路径列表 (按优先级从低到高)
 # ==============================================================================
 merge_configs() {
     local final_config=".config"
+    local user_configs=("$@")
     log_info "开始合并配置文件..."
     
-    # 清空或创建最终的 .config
-    > "$final_config"
-    
-    for config in "$@"; do
+    # --- 步骤 1: 合并用户配置文件 ---
+    > "$final_config" # 清空或创建最终的 .config
+    for config in "${user_configs[@]}"; do
         if [[ -f "$config" ]]; then
             log_info "合并配置: $config"
             cat "$config" >> "$final_config"
@@ -49,41 +50,36 @@ merge_configs() {
         fi
     done
     
-    # 使用 OpenWrt 自带的脚本格式化并整理配置
-    if [[ -f "scripts/config/conf" ]]; then
-        make defconfig
-    else
-        log_warn "未找到 scripts/config/conf，无法执行 make defconfig，请确保在 OpenWrt 源码根目录执行。"
-    fi
-    
-    log_success "配置文件合并并整理完成: $final_config"
-}
-
-# ==============================================================================
-# 函数: compare_luci_packages
-# 描述: 对比两个配置文件中的 LUCI 软件包，并高亮显示差异。
-# 参数: $1 - 用户期望的 LUCI 包配置文件 (如 Pro.config)
-#       $2 - 生成的完整配置文件 (如 .config)
-# ==============================================================================
-compare_luci_packages() {
-    local user_config="$1"
-    local generated_config="$2"
-    
-    log_info "开始对比 LUCI 软件包..."
-    
-    # 提取用户期望的 LUCI 包列表
+    # --- 步骤 2: 分析用户期望的 LUCI 包 ---
+    log_info "分析用户期望的 LUCI 软件包列表..."
     local user_packages
-    user_packages=$(grep "^CONFIG_PACKAGE_luci-app-.*=y" "$user_config" | sed 's/^CONFIG_PACKAGE_\(.*\)=y/\1/' | sort -u)
-    
-    # 提取生成配置中的 LUCI 包列表
+    user_packages=$(grep "^CONFIG_PACKAGE_luci-app-.*=y" "$final_config" | sed 's/^CONFIG_PACKAGE_\(.*\)=y/\1/' | sort -u)
+    if [[ -z "$user_packages" ]]; then
+        log_warn "在用户配置中未找到任何 LUCI 应用包。"
+    else
+        log_info "用户期望的 LUCI 包列表:"
+        echo "$user_packages" | sed 's/^/  - /' | tee -a "${FULL_LOG_PATH:-/dev/null}"
+    fi
+
+    # --- 步骤 3: 执行 make defconfig ---
+    log_info "执行 make defconfig 以生成最终配置..."
+    if ! make defconfig >> "${FULL_LOG_PATH:-/dev/null}" 2>&1; then
+        log_error "make defconfig 执行失败！这通常是由于配置文件中存在语法错误或依赖冲突。"
+        log_error "请检查配置文件: ${user_configs[*]}"
+        log_error "详细错误信息已记录在日志文件中。"
+        exit 1
+    fi
+    log_success "make defconfig 执行成功。"
+
+    # --- 步骤 4: 分析最终生成的 LUCI 包 ---
+    log_info "分析最终生成的 .config 中的 LUCI 软件包列表..."
     local generated_packages
-    generated_packages=$(grep "^CONFIG_PACKAGE_luci-app-.*=y" "$generated_config" | sed 's/^CONFIG_PACKAGE_\(.*\)=y/\1/' | sort -u)
+    generated_packages=$(grep "^CONFIG_PACKAGE_luci-app-.*=y" "$final_config" | sed 's/^CONFIG_PACKAGE_\(.*\)=y/\1/' | sort -u)
+    
+    # --- 步骤 5: 对比并生成报告 ---
+    log_info "开始对比 LUCI 软件包变更..."
     
     # 使用 comm 命令找出差异
-    # comm -12 只显示两文件共有的行
-    # comm -23 只显示第一个文件独有的行 (缺失的包)
-    # comm -13 只显示第二个文件独有的行 (新增的包)
-    
     local missing_packages
     missing_packages=$(comm -23 <(echo "$user_packages") <(echo "$generated_packages"))
     
@@ -95,25 +91,26 @@ compare_luci_packages() {
 
     # --- 输出结果 ---
     if [[ -n "$success_packages" ]]; then
-        log_success "成功包含的 LUCI 包:"
+        log_success "✅ 成功包含的 LUCI 包:"
         echo "$success_packages" | sed 's/^/  - /' | tee -a "${FULL_LOG_PATH:-/dev/null}"
     fi
 
     if [[ -n "$added_packages" ]]; then
-        log_warn "因依赖关系自动新增的 LUCI 包:"
+        log_warn "🔄 因依赖关系自动新增的 LUCI 包:"
         echo "$added_packages" | sed 's/^/  - /' | tee -a "${FULL_LOG_PATH:-/dev/null}"
     fi
 
     if [[ -n "$missing_packages" ]]; then
-        log_error "缺失的 LUCI 包 (请检查 feeds 或包名是否正确):"
+        log_error "❌ 缺失的 LUCI 包 (请检查 feeds 或包名是否正确):"
         echo -e "${RED}$missing_packages${NC}" | sed 's/^/  - /' | tee -a "${FULL_LOG_PATH:-/dev/null}"
-        # 返回非零状态码表示有缺失
+        # 返回非零状态码表示有缺失，这将导致工作流失败
         return 1
     fi
     
-    log_success "所有期望的 LUCI 包均已成功配置。"
+    log_success "🎉 所有期望的 LUCI 包均已成功配置并确认！"
     return 0
 }
+
 
 # ==============================================================================
 # 函数: get_kernel_version
