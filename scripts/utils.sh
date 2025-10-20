@@ -102,7 +102,10 @@ merge_configs() {
 
     if [[ -n "$missing_packages" ]]; then
         log_error "❌ 缺失的 LUCI 包 (请检查 feeds 或包名是否正确):"
-        echo -e "${RED}$missing_packages${NC}" | sed 's/^/  - /' | tee -a "${FULL_LOG_PATH:-/dev/null}"
+        # 【关键修改】逐行处理，确保每一行都被 log_error 高亮
+        echo "$missing_packages" | while IFS= read -r line; do
+            log_error "  - $line"
+        done
         # 返回非零状态码表示有缺失，这将导致工作流失败
         return 1
     fi
