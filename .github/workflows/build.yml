@@ -72,7 +72,7 @@ jobs:
 
     outputs:
       # 将基础环境编译状态传递给下一阶段
-      base_env_success: ${{ steps.check_luci.outcome == 'success' }}
+      base_env_success: ${{ steps.merge_base_config.outcome == 'success' }}
 
     steps:
       - name: 检出代码
@@ -204,6 +204,7 @@ jobs:
           step_end "更新 Feeds"
 
       - name: 合并基础配置
+        id: merge_base_config
         if: steps.cache-base-env.outputs.cache-hit != 'true'
         run: |
           cd openwrt
@@ -211,7 +212,7 @@ jobs:
           source scripts/logger.sh
           source scripts/utils.sh
           step_start "合并基础配置"
-          # 合并芯片配置和分支配置
+          # 合并芯片配置和分支配置，并自动检查
           merge_configs "../configs/base_${{ env.CHIP_ARCH }}.config" "../configs/base_${{ matrix.branch.repo_short }}.config"
           step_end "合并基础配置"
 
@@ -221,7 +222,6 @@ jobs:
           cd openwrt
           source scripts/logger.sh
           step_start "下载所有源码包"
-          make defconfig
           make download -j${{ env.FEEDS_THREADS }}
           step_end "下载所有源码包"
 
@@ -235,19 +235,6 @@ jobs:
           make -j$(nproc) toolchain/compile
           make -j$(nproc) target/compile
           step_end "预编译工具链和核心工具"
-
-      - name: LUCI 软件包预检
-        id: check_luci
-        # 即使缓存命中，也要检查，因为配置可能更新了
-        run: |
-          cd openwrt
-          source scripts/logger.sh
-          step_start "LUCI 软件包预检 (Profile: Pro)"
-          # 模拟合并 Pro 配置
-          merge_configs ".config" "../configs/Pro.config"
-          # 调用检查脚本
-          bash ../scripts/check-luci.sh "Pro" ".config" "../configs/Pro.config"
-          step_end "LUCI 软件包预检 (Profile: Pro)"
 
   # ==============================================================================
   # Job 3: 阶段二 - 构建最终固件
@@ -328,19 +315,9 @@ jobs:
           source scripts/logger.sh
           source scripts/utils.sh
           step_start "合并最终配置 [${{ matrix.profile }}]"
-          # 合并芯片、分支、软件包配置
+          # 合并芯片、分支、软件包配置，并自动检查
           merge_configs "../configs/base_${{ env.CHIP_ARCH }}.config" "../configs/base_${{ matrix.branch.repo_short }}.config" "../configs/${{ matrix.profile }}.config"
           step_end "合并最终配置 [${{ matrix.profile }}]"
-
-      - name: LUCI 软件包终检
-        run: |
-          cd openwrt
-          source scripts/logger.sh
-          step_start "LUCI 软件包终检 (Profile: ${{ matrix.profile }})"
-          make defconfig
-          # 调用检查脚本，进行最终确认
-          bash ../scripts/check-luci.sh "${{ matrix.profile }}" ".config" "../configs/${{ matrix.profile }}.config"
-          step_end "LUCI 软件包终检 (Profile: ${{ matrix.profile }})"
 
       - name: 开始编译固件
         run: |
