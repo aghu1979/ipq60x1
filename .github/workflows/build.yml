@@ -188,9 +188,9 @@ jobs:
           cd openwrt
           # 复制整个 scripts 目录到源码目录内
           cp -r ../scripts .
-          # 执行 diy.sh
+          # 【关键修改】执行 diy.sh 并传入分支和芯片参数
           chmod +x scripts/diy.sh
-          ./scripts/diy.sh
+          ./scripts/diy.sh ${{ matrix.branch.repo_short }} ${{ env.CHIP_ARCH }}
           step_end "加载自定义脚本"
 
       - name: 更新 Feeds
