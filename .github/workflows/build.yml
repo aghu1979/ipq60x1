@@ -142,11 +142,31 @@ jobs:
         run: |
           source scripts/logger.sh
           step_start "设置编译环境"
+          
+          # 定义一个可靠的、固定的依赖包列表作为备用
+          FALLBACK_PACKAGES="build-essential ccache file git libncurses5-dev libpython3-dev libssl-dev python3-distutils python3-filelock python3-pip python3-pyelftools python3-setuptools rsync unzip wget zlib1g-dev qemu-user-static g++ g++-multilib libc6-dev-i386"
+          
+          # 尝试从网络获取依赖列表
+          log_info "尝试从网络获取最新的依赖包列表..."
+          ONLINE_PACKAGES=$(curl -fsSL git.io/depends-ubuntu-2204 || echo "")
+          
+          if [[ -n "$ONLINE_PACKAGES" ]]; then
+            log_success "成功从网络获取依赖列表，将安装: $ONLINE_PACKAGES"
+            PACKAGES_TO_INSTALL="$ONLINE_PACKAGES"
+          else
+            log_warn "网络获取失败，将使用预定义的备用依赖列表。"
+            log_info "备用依赖列表: $FALLBACK_PACKAGES"
+            PACKAGES_TO_INSTALL="$FALLBACK_PACKAGES"
+          fi
+          
+          # 更新包列表并安装依赖
           sudo apt-get update
-          sudo apt-get install -y $(curl -fsSL git.io/depends-ubuntu-2204)
-          sudo systemctl stop unattended-upgrades
-          echo "CCACHE_DIR=~/.ccache" >> $GITHUB_ENV
-          echo "CONFIG_CCACHE=y" >> $GITHUB_ENV
+          sudo apt-get install -y $PACKAGES_TO_INSTALL
+          
+          # 停止 unattended-upgrades 服务，避免编译过程中被干扰
+          # 使用 || true 确保即使服务不存在也不会报错
+          sudo systemctl stop unattended-upgrades.service || true
+          
           step_end "设置编译环境"
 
       - name: 克隆源码
