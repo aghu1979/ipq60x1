@@ -179,6 +179,16 @@ jobs:
           git checkout ${{ matrix.branch.repo_branch }}
           step_end "克隆 ${{ matrix.branch.repo_short }} 源码"
 
+      - name: 更新 Feeds
+        if: steps.cache-base-env.outputs.cache-hit != 'true'
+        run: |
+          cd openwrt
+          source scripts/logger.sh
+          step_start "更新 Feeds"
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          step_end "更新 Feeds"
+
       - name: 加载自定义脚本
         if: steps.cache-base-env.outputs.cache-hit != 'true'
         run: |
@@ -192,16 +202,6 @@ jobs:
           chmod +x scripts/diy.sh
           ./scripts/diy.sh ${{ matrix.branch.repo_short }} ${{ env.CHIP_ARCH }}
           step_end "加载自定义脚本"
-
-      - name: 更新 Feeds
-        if: steps.cache-base-env.outputs.cache-hit != 'true'
-        run: |
-          cd openwrt
-          source scripts/logger.sh
-          step_start "更新 Feeds"
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-          step_end "更新 Feeds"
 
       - name: 合并基础配置
         id: merge_base_config
