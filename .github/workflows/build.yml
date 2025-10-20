@@ -186,10 +186,11 @@ jobs:
           step_start "加载自定义脚本"
           # 进入源码目录执行
           cd openwrt
-          # 复制并执行 diy.sh
-          cp ../scripts/diy.sh .
-          chmod +x diy.sh
-          ./diy.sh
+          # 【关键修改】复制整个 scripts 目录到源码目录内
+          cp -r ../scripts .
+          # 执行 diy.sh
+          chmod +x scripts/diy.sh
+          ./scripts/diy.sh
           step_end "加载自定义脚本"
 
       - name: 更新 Feeds
