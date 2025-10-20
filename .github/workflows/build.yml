@@ -207,6 +207,8 @@ jobs:
         if: steps.cache-base-env.outputs.cache-hit != 'true'
         run: |
           cd openwrt
+          # 【关键修改】先显式加载 logger.sh，再加载 utils.sh
+          source scripts/logger.sh
           source scripts/utils.sh
           step_start "合并基础配置"
           # 合并芯片配置和分支配置
@@ -322,6 +324,8 @@ jobs:
       - name: 合并最终配置
         run: |
           cd openwrt
+          # 【关键修改】先显式加载 logger.sh，再加载 utils.sh
+          source scripts/logger.sh
           source scripts/utils.sh
           step_start "合并最终配置 [${{ matrix.profile }}]"
           # 合并芯片、分支、软件包配置
@@ -349,8 +353,9 @@ jobs:
       - name: 整理和重命名产物
         run: |
           cd openwrt
-          source scripts/utils.sh
+          # 【关键修改】先显式加载 logger.sh，再加载 utils.sh
           source scripts/logger.sh
+          source scripts/utils.sh
           step_start "整理和重命名产物"
           
           # 创建临时目录存放产物 (路径相对于仓库根目录)
@@ -422,8 +427,9 @@ jobs:
 
       - name: 整理和打包发布文件
         run: |
-          source scripts/utils.sh
+          # 【关键修改】先显式加载 logger.sh，再加载 utils.sh
           source scripts/logger.sh
+          source scripts/utils.sh
           step_start "整理和打包发布文件"
           
           mkdir -p release_upload
