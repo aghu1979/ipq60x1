@@ -22,7 +22,7 @@ env:
   FEEDS_THREADS: 4
   # 定义编译时的并发数
   BUILD_THREADS: $(nproc)
-  # 定义产物存放目录
+  # 定义产物存放目录 (相对于仓库根目录)
   ARTIFACTS_DIR: released_files
   # 定义日志文件名
   LOG_FILE: build.log
@@ -58,7 +58,7 @@ jobs:
   #       并进行 LUCI 软件包预检。
   # ==============================================================================
   build-base:
-    name: 🏗️ 阶段一 - 构建 [${{ matrix.branch }}] 基础环境
+    name: 🏗️ 阶段一 - 构建 [${{ matrix.branch.repo_short }}] 基础环境
     runs-on: ubuntu-22.04
     needs: prepare
     # 定义矩阵，并行处理不同分支
@@ -68,7 +68,7 @@ jobs:
         branch:
           - { repo_short: openwrt, repo_url: "https://github.com/openwrt/openwrt.git", repo_branch: "master" }
           - { repo_short: immwrt, repo_url: "https://github.com/immortalwrt/immortalwrt.git", repo_branch: "master" }
-          - { repo_short: libwrt, repo_url: "https://github.com/openwrt/openwrt.git", repo_branch: "openwrt-24.10" } # 注意：libwrt的源需要您确认，这里用官方24.10分支作为示例
+          - { repo_short: libwrt, repo_url: "https://github.com/openwrt/openwrt.git", repo_branch: "openwrt-24.10" }
 
     outputs:
       # 将基础环境编译状态传递给下一阶段
@@ -110,7 +110,7 @@ jobs:
         id: cache-dl
         uses: actions/cache@v4
         with:
-          path: dl/
+          path: openwrt/dl/
           key: dl-${{ env.CHIP_ARCH }}-${{ hashFiles('hashes.txt') }}
           restore-keys: |
             dl-${{ env.CHIP_ARCH }}-
@@ -128,11 +128,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            build_dir/target/
-            build_dir/host/
-            staging_dir/
-            .config
-            feeds.conf
+            openwrt/build_dir/target/
+            openwrt/build_dir/host/
+            openwrt/staging_dir/
+            openwrt/.config
+            openwrt/feeds.conf
           key: base-env-${{ matrix.branch.repo_short }}-${{ env.CHIP_ARCH }}-${{ hashFiles('hashes.txt') }}
           restore-keys: |
             base-env-${{ matrix.branch.repo_short }}-${{ env.CHIP_ARCH }}-
@@ -186,7 +186,7 @@ jobs:
           step_start "加载自定义脚本"
           # 进入源码目录执行
           cd openwrt
-          # 【关键修改】复制整个 scripts 目录到源码目录内
+          # 复制整个 scripts 目录到源码目录内
           cp -r ../scripts .
           # 执行 diy.sh
           chmod +x scripts/diy.sh
@@ -196,9 +196,9 @@ jobs:
       - name: 更新 Feeds
         if: steps.cache-base-env.outputs.cache-hit != 'true'
         run: |
+          cd openwrt
           source scripts/logger.sh
           step_start "更新 Feeds"
-          cd openwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           step_end "更新 Feeds"
@@ -206,9 +206,9 @@ jobs:
       - name: 合并基础配置
         if: steps.cache-base-env.outputs.cache-hit != 'true'
         run: |
+          cd openwrt
           source scripts/utils.sh
           step_start "合并基础配置"
-          cd openwrt
           # 合并芯片配置和分支配置
           merge_configs "../configs/base_${{ env.CHIP_ARCH }}.config" "../configs/base_${{ matrix.branch.repo_short }}.config"
           step_end "合并基础配置"
@@ -216,9 +216,9 @@ jobs:
       - name: 下载源码包
         if: steps.cache-base-env.outputs.cache-hit != 'true'
         run: |
+          cd openwrt
           source scripts/logger.sh
           step_start "下载所有源码包"
-          cd openwrt
           make defconfig
           make download -j${{ env.FEEDS_THREADS }}
           step_end "下载所有源码包"
@@ -226,21 +226,21 @@ jobs:
       - name: 预编译工具链和核心工具
         if: steps.cache-base-env.outputs.cache-hit != 'true'
         run: |
+          cd openwrt
           source scripts/logger.sh
           step_start "预编译工具链和核心工具"
-          cd openwrt
           make -j$(nproc) tools/compile
           make -j$(nproc) toolchain/compile
-          make -j$(nproc) target/compile LINUX_UNAME_VERSION=6.6.47 # 示例内核版本，实际由.config决定
+          make -j$(nproc) target/compile
           step_end "预编译工具链和核心工具"
 
       - name: LUCI 软件包预检
         id: check_luci
         # 即使缓存命中，也要检查，因为配置可能更新了
         run: |
+          cd openwrt
           source scripts/logger.sh
           step_start "LUCI 软件包预检 (Profile: Pro)"
-          cd openwrt
           # 模拟合并 Pro 配置
           merge_configs ".config" "../configs/Pro.config"
           # 调用检查脚本
@@ -252,7 +252,7 @@ jobs:
   # 目的: 在基础环境之上，并行编译所有最终固件。
   # ==============================================================================
   build-final:
-    name: 📦 阶段二 - 构建 [${{ matrix.branch }}-${{ matrix.profile }}] 固件
+    name: 📦 阶段二 - 构建 [${{ matrix.branch.repo_short }}-${{ matrix.profile }}] 固件
     runs-on: ubuntu-22.04
     needs: build-base
     # 只有当所有基础环境都成功构建后，才执行此阶段
@@ -282,7 +282,7 @@ jobs:
       - name: 恢复 DL 缓存
         uses: actions/cache@v4
         with:
-          path: dl/
+          path: openwrt/dl/
           key: dl-${{ env.CHIP_ARCH }}-${{ hashFiles('hashes.txt') }}
 
       - name: 恢复 Ccache 缓存
@@ -295,11 +295,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            build_dir/target/
-            build_dir/host/
-            staging_dir/
-            .config
-            feeds.conf
+            openwrt/build_dir/target/
+            openwrt/build_dir/host/
+            openwrt/staging_dir/
+            openwrt/.config
+            openwrt/feeds.conf
           key: base-env-${{ matrix.branch.repo_short }}-${{ env.CHIP_ARCH }}-${{ hashFiles('hashes.txt') }}
 
       - name: 克隆源码
@@ -311,20 +311,28 @@ jobs:
           git checkout ${{ matrix.branch.repo_branch }}
           step_end "克隆 ${{ matrix.branch.repo_short }} 源码"
 
+      - name: 复制脚本
+        run: |
+          source scripts/logger.sh
+          step_start "复制脚本到源码目录"
+          cd openwrt
+          cp -r ../scripts .
+          step_end "复制脚本到源码目录"
+
       - name: 合并最终配置
         run: |
+          cd openwrt
           source scripts/utils.sh
           step_start "合并最终配置 [${{ matrix.profile }}]"
-          cd openwrt
           # 合并芯片、分支、软件包配置
           merge_configs "../configs/base_${{ env.CHIP_ARCH }}.config" "../configs/base_${{ matrix.branch.repo_short }}.config" "../configs/${{ matrix.profile }}.config"
           step_end "合并最终配置 [${{ matrix.profile }}]"
 
       - name: LUCI 软件包终检
         run: |
+          cd openwrt
           source scripts/logger.sh
           step_start "LUCI 软件包终检 (Profile: ${{ matrix.profile }})"
-          cd openwrt
           make defconfig
           # 调用检查脚本，进行最终确认
           bash ../scripts/check-luci.sh "${{ matrix.profile }}" ".config" "../configs/${{ matrix.profile }}.config"
@@ -332,22 +340,21 @@ jobs:
 
       - name: 开始编译固件
         run: |
-          source scripts/logger.sh
-          step_start "开始编译固件 [${{ matrix.branch }}-${{ matrix.profile }}]"
           cd openwrt
+          source scripts/logger.sh
+          step_start "开始编译固件 [${{ matrix.branch.repo_short }}-${{ matrix.profile }}]"
           make -j$(nproc) || make -j1 V=s
-          step_end "开始编译固件 [${{ matrix.branch }}-${{ matrix.profile }}]"
+          step_end "开始编译固件 [${{ matrix.branch.repo_short }}-${{ matrix.profile }}]"
 
       - name: 整理和重命名产物
         run: |
+          cd openwrt
           source scripts/utils.sh
           source scripts/logger.sh
           step_start "整理和重命名产物"
           
-          # 创建临时目录存放产物
-          mkdir -p ${{ env.ARTIFACTS_DIR }}/${{ matrix.branch.repo_short }}-${{ matrix.profile }}
-          
-          cd openwrt
+          # 创建临时目录存放产物 (路径相对于仓库根目录)
+          mkdir -p ../${{ env.ARTIFACTS_DIR }}/${{ matrix.branch.repo_short }}-${{ matrix.profile }}
           
           # 提取设备列表
           devices=$(extract_devices "../configs/base_${{ env.CHIP_ARCH }}.config")
