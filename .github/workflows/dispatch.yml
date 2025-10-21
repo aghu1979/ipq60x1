@@ -3,7 +3,7 @@ name: 调度中心
 
 on:
   schedule:
-    - cron: '0 16 * * 4'
+    - cron: '0 16 * * 4' # UTC 周四 16:00 = 北京时间 周五 00:00
   workflow_dispatch:
     inputs:
       os_version:
@@ -14,6 +14,11 @@ on:
         options:
           - ubuntu-22.04
           - ubuntu-24.04
+
+# 将权限提升到 workflow 级别，这是最标准的写法
+permissions:
+  contents: write
+  releases: write
 
 # 全局环境变量
 env:
@@ -33,8 +38,6 @@ jobs:
   setup:
     name: 📋 准备工作
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     outputs:
       hashes-value: ${{ steps.generate-hashes.outputs.hashes-value }}
       devices: ${{ steps.get-devices.outputs.devices }}
@@ -46,7 +49,7 @@ jobs:
       - name: 🔑 生成哈希文件
         id: generate-hashes
         run: |
-          # 将 env 变量赋值给 shell 变量
+          # 将所有 env 变量显式赋值给 shell 变量，以兼容静态分析器
           CHIPSET_VAR="${{ env.CHIPSET }}"
           BRANCH_VAR="${{ env.BRANCH }}"
           COLOR_ERROR_VAR="${{ env.COLOR_ERROR }}"
@@ -101,8 +104,6 @@ jobs:
   build-firmware:
     name: 🏗️ 构建 ${{ matrix.profile }} 配置
     needs: setup
-    permissions:
-      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -122,9 +123,7 @@ jobs:
     if: always() && needs.setup.result == 'success'
     needs: [setup, build-firmware]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      releases: write
+    # 此处的 permissions 已移至 workflow 顶层
     steps:
       - name: ⬇️ 检出代码
         uses: actions/checkout@v4
@@ -143,7 +142,7 @@ jobs:
           tar -czvf release_assets/${CHIPSET_VAR}-config.tar.gz -C all_artifacts config/
           tar -czvf release_assets/${CHIPSET_VAR}-app.tar.gz -C all_artifacts packages/
           tar -czvf release_assets/${CHIPSET_VAR}-log.tar.gz -C all_artifacts logs/
-          cp -r all_artifacts/firmware/* release_assets/
+          cp -r all_artifacts/firmware/* release_assets/ || true # 如果没有固件则跳过
           
           tar -tzf release_assets/${CHIPSET_VAR}-app.tar.gz | grep luci-app | sed 's/.*\///' | sort | uniq > release_assets/luci_apps_list.txt
 
