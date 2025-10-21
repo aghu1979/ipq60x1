@@ -111,7 +111,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: openwrt/dl/
-          key: dl-${{ env.CHIP_ARCH }}-${{ hashFiles('hashes.txt') }}
+          key: dl-${{ env.CHIP_ARCH }}-${{ hashFiles('hashes.txt', 'scripts/diy.sh') }}
           restore-keys: |
             dl-${{ env.CHIP_ARCH }}-
 
@@ -133,7 +133,7 @@ jobs:
             openwrt/staging_dir/
             openwrt/.config
             openwrt/feeds.conf
-          key: base-env-${{ matrix.branch.repo_short }}-${{ env.CHIP_ARCH }}-${{ hashFiles('hashes.txt') }}
+          key: base-env-${{ matrix.branch.repo_short }}-${{ env.CHIP_ARCH }}-${{ hashFiles('hashes.txt', 'scripts/diy.sh') }}
           restore-keys: |
             base-env-${{ matrix.branch.repo_short }}-${{ env.CHIP_ARCH }}-
 
@@ -185,7 +185,6 @@ jobs:
           source scripts/logger.sh
           step_start "复制脚本到源码目录"
           cd openwrt
-          # 【关键修改】将复制脚本作为独立步骤，确保后续步骤能找到脚本
           cp -r ../scripts .
           step_end "复制脚本到源码目录"
 
@@ -195,8 +194,32 @@ jobs:
           cd openwrt
           source scripts/logger.sh
           step_start "更新 Feeds"
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          
+          # 【关键修改】增加重试机制，并禁用有问题的 video 源
+          # 禁用 video 源以避免 Makefile 错误
+          if [ "${{ matrix.branch.repo_short }}" == "openwrt" ]; then
+            log_warn "检测到 openwrt 分支，禁用有问题的 video 源以避免更新失败。"
+            sed -i '/src-git video/d' feeds.conf.default
+          fi
+          
+          # 带重试的 feeds update
+          for i in {1..3}; do
+            log_info "第 $i 次尝试更新 Feeds..."
+            if ./scripts/feeds update -a; then
+              log_success "Feeds 更新成功。"
+              break
+            else
+              log_warn "Feeds 更新失败，等待 10 秒后重试..."
+              if [ $i -eq 3 ]; then
+                log_error "Feeds 更新最终失败，但将继续尝试安装。"
+              fi
+              sleep 10
+            fi
+          done
+          
+          # 尝试安装，即使更新失败也继续
+          ./scripts/feeds install -a || log_warn "Feeds 安装部分失败，已忽略。"
+          
           step_end "更新 Feeds"
 
       - name: 加载自定义脚本
@@ -205,7 +228,6 @@ jobs:
           cd openwrt
           source scripts/logger.sh
           step_start "加载自定义脚本"
-          # 【关键修改】执行 diy.sh 并传入分支和芯片参数 (不再需要复制脚本)
           chmod +x scripts/diy.sh
           ./scripts/diy.sh ${{ matrix.branch.repo_short }} ${{ env.CHIP_ARCH }}
           step_end "加载自定义脚本"
@@ -215,7 +237,6 @@ jobs:
         if: steps.cache-base-env.outputs.cache-hit != 'true'
         run: |
           cd openwrt
-          # 【关键修改】先显式加载 logger.sh，再加载 utils.sh
           source scripts/logger.sh
           source scripts/utils.sh
           step_start "合并基础配置"
@@ -279,7 +300,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: openwrt/dl/
-          key: dl-${{ env.CHIP_ARCH }}-${{ hashFiles('hashes.txt') }}
+          key: dl-${{ env.CHIP_ARCH }}-${{ hashFiles('hashes.txt', 'scripts/diy.sh') }}
 
       - name: 恢复 Ccache 缓存
         uses: actions/cache@v4
@@ -296,7 +317,7 @@ jobs:
             openwrt/staging_dir/
             openwrt/.config
             openwrt/feeds.conf
-          key: base-env-${{ matrix.branch.repo_short }}-${{ env.CHIP_ARCH }}-${{ hashFiles('hashes.txt') }}
+          key: base-env-${{ matrix.branch.repo_short }}-${{ env.CHIP_ARCH }}-${{ hashFiles('hashes.txt', 'scripts/diy.sh') }}
 
       - name: 克隆源码
         run: |
@@ -318,7 +339,6 @@ jobs:
       - name: 合并最终配置
         run: |
           cd openwrt
-          # 【关键修改】先显式加载 logger.sh，再加载 utils.sh
           source scripts/logger.sh
           source scripts/utils.sh
           step_start "合并最终配置 [${{ matrix.profile }}]"
@@ -337,7 +357,6 @@ jobs:
       - name: 整理和重命名产物
         run: |
           cd openwrt
-          # 【关键修改】先显式加载 logger.sh，再加载 utils.sh
           source scripts/logger.sh
           source scripts/utils.sh
           step_start "整理和重命名产物"
@@ -402,7 +421,7 @@ jobs:
         run: |
           source scripts/logger.sh
           log_info "工作流开始，日志文件: ${{ env.LOG_FILE }}"
-          echo "FULL_LOG_PATH=$(pwd)/${{ env.LOG_PATH}}" >> $GITHUB_ENV
+          echo "FULL_LOG_PATH=$(pwd)/${{ env.LOG_FILE }}" >> $GITHUB_ENV
 
       - name: 下载所有产物
         uses: actions/download-artifact@v4
@@ -411,7 +430,6 @@ jobs:
 
       - name: 整理和打包发布文件
         run: |
-          # 【关键修改】先显式加载 logger.sh，再加载 utils.sh
           source scripts/logger.sh
           source scripts/utils.sh
           step_start "整理和打包发布文件"
