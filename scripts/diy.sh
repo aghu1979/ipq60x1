@@ -45,8 +45,8 @@ main() {
         "package/feeds/packages/wechatpush"
         "package/feeds/packages/open-app-filter"
         "package/feeds/packages/gecoosac"
-        "package/feeds/luci/luci-app-frpc"
-        "package/feeds/luci/luci-app-frps"
+        # "package/feeds/luci/luci-app-frpc"  # 已移除，因为源中不存在
+        # "package/feeds/luci/luci-app-frps"  # 已移除，因为源中不存在
         "package/feeds/luci/luci-app-adguardhome"
         "package/feeds/luci/luci-app-wolplus"
         "package/feeds/luci/luci-app-lucky"
@@ -89,8 +89,8 @@ main() {
         "feeds/packages/net/wechatpush"
         "feeds/packages/net/open-app-filter"
         "feeds/packages/net/gecoosac"
-        "feeds/luci/applications/luci-app-frpc"
-        "feeds/luci/applications/luci-app-frps"
+        # "feeds/luci/applications/luci-app-frpc"  # 已移除
+        # "feeds/luci/applications/luci-app-frps"  # 已移除
         "feeds/luci/applications/luci-app-adguardhome"
         "feeds/luci/applications/luci-app-wolplus"
         "feeds/luci/applications/luci-app-lucky"
@@ -127,16 +127,18 @@ main() {
     git clone --depth=1 https://github.com/sbwml/luci-app-openlist2 package/openlist
     
     # 【关键修正】处理来自元仓库的包
-    echo "Cloning from laipeng668 meta-repo..."
+    echo "Cloning from laipeng668/packages meta-repo..."
     git clone --depth=1 https://github.com/laipeng668/packages.git temp_laipeng_repo
     # 【关键修正】注释掉不存在的包
     # mv temp_laipeng_repo/ariang feeds/packages/net/
     # mv temp_laipeng_repo/frp feeds/packages/net/
     rm -rf temp_laipeng_repo
 
+    echo "Cloning from laipeng668/luci meta-repo..."
     git clone --depth=1 https://github.com/laipeng668/luci.git temp_laipeng_luci_repo
-    mv temp_laipeng_luci_repo/luci-app-frpc feeds/luci/applications/
-    mv temp_laipeng_luci_repo/luci-app-frps feeds/luci/applications/
+    # 【关键修正】注释掉不存在的包
+    # mv temp_laipeng_luci_repo/luci-app-frpc feeds/luci/applications/
+    # mv temp_laipeng_luci_repo/luci-app-frps feeds/luci/applications/
     rm -rf temp_laipeng_luci_repo
 
     # kenzok8定制包 (来自元仓库)
