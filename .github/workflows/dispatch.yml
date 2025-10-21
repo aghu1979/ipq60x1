@@ -1,0 +1,187 @@
+# .github/workflows/dispatch.yml
+name: 🚀 调度中心
+
+on:
+  # 北京时间每周五0点 (UTC+8 = UTC周四16:00) 自动触发
+  schedule:
+    - cron: '0 16 * * 4'
+  # 允许手动触发
+  workflow_dispatch:
+    inputs:
+      os_version:
+        description: '选择操作系统版本'
+        required: true
+        default: 'ubuntu-22.04'
+        type: choice
+        options:
+          - ubuntu-22.04
+          - ubuntu-24.04
+
+# 全局环境变量
+env:
+  CHIPSET: ipq60xx
+  BRANCH: immwrt
+  # 定义输出颜色和图标
+  COLOR_ERROR: '\033[1;31m'
+  COLOR_WARN: '\033[1;33m'
+  COLOR_INFO: '\033[1;36m'
+  COLOR_SUCCESS: '\033[1;32m'
+  COLOR_RESET: '\033[0m'
+  ICON_ERROR: '❌'
+  ICON_WARN: '⚠️'
+  ICON_INFO: 'ℹ️'
+  ICON_SUCCESS: '✅'
+
+jobs:
+  # 作业1: 准备工作
+  # 生成缓存哈希、提取设备列表等，供后续作业使用
+  setup:
+    name: 📋 准备工作
+    runs-on: ubuntu-latest
+    outputs:
+      # 输出哈希值，供所有构建作业使用
+      hashes-value: ${{ steps.generate-hashes.outputs.hashes-value }}
+      # 输出设备列表，供构建和发布作业使用
+      devices: ${{ steps.get-devices.outputs.devices }}
+      # 输出内核版本，供发布作业使用
+      kernel-version: ${{ steps.get-kernel.outputs.kernel-version }}
+    steps:
+      - name: ⬇️ 检出代码
+        uses: actions/checkout@v4
+
+      - name: 🔑 生成哈希文件
+        id: generate-hashes
+        run: |
+          set -euo pipefail
+          HASH_FILES=(
+            "configs/base_${{ env.CHIPSET }}.config"
+            "configs/base_${{ env.BRANCH }}.config"
+            "scripts/diy.sh"
+            "scripts/repo.sh"
+          )
+          for file in "${HASH_FILES[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo -e "${{ env.COLOR_ERROR}}${{ env.ICON_ERROR}} 错误: 文件 $file 不存在！${{ env.COLOR_RESET}}"
+              exit 1
+            fi
+          done
+          HASH_VALUE=$(cat "${HASH_FILES[@]}" | sha256sum | cut -d' ' -f1)
+          echo "hashes-value=$HASH_VALUE" >> $GITHUB_OUTPUT
+          echo -e "${{ env.COLOR_SUCCESS}}${{ env.ICON_SUCCESS}} 缓存哈希值: $HASH_VALUE${{ env.COLOR_RESET}}"
+
+      - name: 🔍 提取设备列表
+        id: get-devices
+        run: |
+          set -euo pipefail
+          DEVICES=$(grep -oE 'CONFIG_TARGET_DEVICE_.*_DEVICE_(.*)=y' "configs/base_${{ env.CHIPSET }}.config" | sed -E 's/CONFIG_TARGET_DEVICE_.*_DEVICE_(.*)=y/\1/' | tr '\n' ' ')
+          echo "devices=$DEVICES" >> $GITHUB_OUTPUT
+          echo -e "${{ env.COLOR_SUCCESS}}${{ env.ICON_SUCCESS}} 发现设备: $DEVICES${{ env.COLOR_RESET}}"
+          
+      - name: 🔍 获取内核版本 (需要先克隆源码)
+        id: get-kernel
+        run: |
+          set -euo pipefail
+          git clone --depth=1 https://github.com/immortalwrt/immortalwrt
+          cd immortalwrt
+          # 临时生成一个最小配置来获取内核版本
+          echo "CONFIG_TARGET_${{ env.CHIPSET }}=y" > .config
+          KERNEL_VERSION=$(make kernelconfig | grep -oP 'CONFIG_KERNEL_\K[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+          echo "kernel-version=$KERNEL_VERSION" >> $GITHUB_OUTPUT
+          echo -e "${{ env.COLOR_SUCCESS}}${{ env.ICON_SUCCESS}} 内核版本: $KERNEL_VERSION${{ env.COLOR_RESET}}"
+
+  # 作业2: 并行构建固件
+  # 使用矩阵策略，为每个配置调用可复用构建工作流
+  build-firmware:
+    name: 🏗️ 构建 ${{ matrix.profile }} 配置
+    needs: setup
+    strategy:
+      fail-fast: false # 一个配置失败，其他配置继续
+      matrix:
+        profile: [Pro, Max, Ultra]
+    uses: ./.github/workflows/reusable_builder.yml
+    with:
+      os_version: ${{ inputs.os_version || 'ubuntu-22.04' }}
+      chipset: ${{ env.CHIPSET }}
+      branch: ${{ env.BRANCH }}
+      profile: ${{ matrix.profile }}
+      hashes-value: ${{ needs.setup.outputs.hashes-value }}
+      devices: ${{ needs.setup.outputs.devices }}
+    secrets: inherit
+
+  # 作业3: 发布 Release
+  # 在所有构建作业完成后，收集产物并发布
+  release:
+    name: 🚀 发布 Release
+    # needs 所有构建作业都完成 (无论成功失败)，并且 setup 作业成功
+    if: always() && needs.setup.result == 'success'
+    needs: [setup, build-firmware]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      releases: write
+    steps:
+      - name: ⬇️ 检出代码
+        uses: actions/checkout@v4
+
+      - name: 📥 下载所有产物
+        uses: actions/download-artifact@v4
+        with:
+          path: all_artifacts
+          merge-multiple: true
+
+      - name: 📦 打包最终产物
+        run: |
+          set -euo pipefail
+          mkdir -p release_assets
+          # 打包配置文件
+          tar -czvf release_assets/${{ env.CHIPSET }}-config.tar.gz -C all_artifacts config/
+          # 打包软件包
+          tar -czvf release_assets/${{ env.CHIPSET }}-app.tar.gz -C all_artifacts packages/
+          # 打包日志
+          tar -czvf release_assets/${{ env.CHIPSET }}-log.tar.gz -C all_artifacts logs/
+          # 复制固件
+          cp -r all_artifacts/firmware/* release_assets/
+          
+          # 生成 LuCI 应用列表
+          tar -tzf release_assets/${{ env.CHIPSET }}-app.tar.gz | grep luci-app | sed 's/.*\///' | sort | uniq > release_assets/luci_apps_list.txt
+
+      - name: 🚀 发布到 GitHub Release
+        # 只有当所有构建任务都成功时才发布
+        if: needs.build-firmware.result == 'success'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.CHIPSET }}-${{ github.run_number }}-${{ github.sha }}
+          body: |
+            ## 🎉 ImmortalWrt ${{ env.CHIPSET }} 固件发布
+            - **作者**: Mary
+            - **发布时间**: ${{ github.event.head_commit.timestamp }}
+            - **源码分支**: ${{ env.BRANCH }}
+            - **编译配置**: Pro, Max, Ultra
+            - **内核版本**: ${{ needs.setup.outputs.kernel-version }}
+            
+            ---
+            
+            ## 📋 固件信息
+            - **默认管理地址**: 192.168.111.1
+            - **默认用户**: root
+            - **默认密码**: 无 (直接回车)
+            - **默认WIFI密码**: 12345678
+            
+            ---
+            
+            ## 📦 包含的 LuCI 应用列表
+            $(cat release_assets/luci_apps_list.txt)
+            
+            ---
+            
+            ## ⬇️ 下载说明
+            请根据您的设备型号和所需配置下载对应的固件文件。
+            - `immwrt-<设备名>-<factory/sysupgrade>-<Pro/Max/Ultra>.bin` 是固件文件。
+            - `${{ env.CHIPSET }}-config.tar.gz` 包含所有配置、清单和构建信息。
+            - `${{ env.CHIPSET }}-app.tar.gz` 包含所有编译出的软件包。
+            - `${{ env.CHIPSET }}-log.tar.gz` 包含本次编译的详细日志。
+
+          files: |
+            release_assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
