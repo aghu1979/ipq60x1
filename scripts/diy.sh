@@ -21,7 +21,7 @@ main() {
     sed -i 's/192.168.1.1/192.168.111.1/g' package/base-files/files/bin/config_generate
     sed -i "s/hostname='.*'/hostname='WRT'/g" package/base-files/files/bin/config_generate
     
-    # 【关键修改】增加文件存在性检查，防止在某些分支上因文件不存在而报错
+    # 增加文件存在性检查，防止在某些分支上因文件不存在而报错
     local luci_status_file="feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js"
     if [ -f "$luci_status_file" ]; then
         sed -i "s/(\(luciversion || ''\))/(\1) + (' \/ Built by Mary')/g" "$luci_status_file"
@@ -122,33 +122,49 @@ main() {
 
     # 步骤 4: 克隆定制化软件包
     echo "==> Step 4: Cloning custom packages..."
-    # laipeng668定制包
+    # laipeng668定制包 (来自元仓库)
     git clone --depth=1 https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang
     git clone --depth=1 https://github.com/sbwml/luci-app-openlist2 package/openlist
-    git clone --depth=1 https://github.com/laipeng668/packages.git feeds/packages/net/ariang
-    git clone --depth=1 https://github.com/laipeng668/packages.git feeds/packages/net/frp
-    git clone --depth=1 https://github.com/laipeng668/luci.git feeds/luci/applications/luci-app-frpc
-    git clone --depth=1 https://github.com/laipeng668/luci.git feeds/luci/applications/luci-app-frps
-    git clone --depth=1 https://github.com/kenzok8/openwrt-packages.git package/adguardhome
-    git clone --depth=1 https://github.com/kenzok8/openwrt-packages.git package/luci-app-adguardhome
+    
+    # 【关键修正】处理来自元仓库的包
+    echo "Cloning from laipeng668 meta-repo..."
+    git clone --depth=1 https://github.com/laipeng668/packages.git temp_laipeng_repo
+    mv temp_laipeng_repo/ariang feeds/packages/net/
+    mv temp_laipeng_repo/frp feeds/packages/net/
+    rm -rf temp_laipeng_repo
+
+    git clone --depth=1 https://github.com/laipeng668/luci.git temp_laipeng_luci_repo
+    mv temp_laipeng_luci_repo/luci-app-frpc feeds/luci/applications/
+    mv temp_laipeng_luci_repo/luci-app-frps feeds/luci/applications/
+    rm -rf temp_laipeng_luci_repo
+
+    # kenzok8定制包 (来自元仓库)
+    git clone --depth=1 https://github.com/kenzok8/openwrt-packages.git temp_kenzok8_repo
+    mv temp_kenzok8_repo/luci-app-adguardhome package/
+    rm -rf temp_kenzok8_repo
+
+    # 【关键修正】处理 luci-app-wolplus
+    echo "Cloning luci-app-wolplus from VIKINGYFY meta-repo..."
+    git clone --depth=1 https://github.com/VIKINGYFY/packages.git temp_vikingyfy_repo
+    mv temp_vikingyfy_repo/luci-app-wolplus feeds/luci/applications/
+    rm -rf temp_vikingyfy_repo
+
     git clone --depth=1 https://github.com/tty228/luci-app-wechatpush.git package/luci-app-wechatpush
     git clone --depth=1 https://github.com/destan19/OpenAppFilter.git package/OpenAppFilter
     git clone --depth=1 https://github.com/lwb1978/openwrt-gecoosac.git package/openwrt-gecoosac
     git clone --depth=1 https://github.com/NONGFAH/luci-app-athena-led.git package/luci-app-athena-led
     
-    # Mary定制包
+    # Mary定制包 (大部分是单包仓库，可以直接克隆)
     git clone --depth=1 https://github.com/sirpdboy/luci-app-netspeedtest.git package/netspeedtest
     git clone --depth=1 https://github.com/sirpdboy/luci-app-partexp.git package/partexp
     git clone --depth=1 https://github.com/sirpdboy/luci-app-taskplan.git package/taskplan
     git clone --depth=1 https://github.com/tailscale/tailscale.git package/tailscale
-    git clone https://github.com/asvow/luci-app-tailscale package/luci-app-tailscale
     git clone --depth=1 https://github.com/nikkinikki-org/OpenWrt-momo.git package/momo
     git clone --depth=1 https://github.com/nikkinikki-org/OpenWrt-nikki.git package/nikki
     git clone --depth=1 https://github.com/vernesong/OpenClash.git package/openclash
 
     # kenzok8软件源（该软件源仅作为查漏补缺，优先级最低，仅在上方软件源未命中feeds中软件包时才提供。)
     git clone --depth=1 https://github.com/kenzok8/small-package smpackage 
-
 
     # 设置权限
     chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
