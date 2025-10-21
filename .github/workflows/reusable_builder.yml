@@ -49,14 +49,15 @@ jobs:
     name: 🛠️ 编译 ${{ inputs.profile }}
     runs-on: ${{ inputs.os_version }}
     permissions:
-      contents: read
+      contents: read # 构建作业只需要读取权限
     steps:
       - name: ⬇️ 检出代码
         uses: actions/checkout@v4
 
       - name: 💾 显示编译前磁盘空间
         run: |
-          echo -e "${{ env.COLOR_INFO}}${{ env.ICON_INFO}} 编译前磁盘空间: ${{ env.COLOR_RESET}}"
+          # 在 shell 中使用 $COLOR_INFO 等
+          echo -e "${COLOR_INFO}${ICON_INFO} 编译前磁盘空间: ${COLOR_RESET}"
           df -hT
 
       - name: 🧹 清理磁盘空间
@@ -71,7 +72,7 @@ jobs:
 
       - name: 💾 显示清理后磁盘空间
         run: |
-          echo -e "${{ env.COLOR_INFO}}${{ env.ICON_INFO}} 清理后磁盘空间: ${{ env.COLOR_RESET}}"
+          echo -e "${COLOR_INFO}${ICON_INFO} 清理后磁盘空间: ${COLOR_RESET}"
           df -hT
 
       - name: 📦 恢复/创建缓存
@@ -93,28 +94,28 @@ jobs:
           sudo rm -rf /etc/apt/sources.list.d/*
           sudo apt-get update
           sudo apt-get install -y $(curl -fsSL git.io/depends-ubuntu-2204)
-          echo -e "${{ env.COLOR_SUCCESS}}${{ env.ICON_SUCCESS}} 依赖安装完成${{ env.COLOR_RESET}}"
+          echo -e "${COLOR_SUCCESS}${ICON_SUCCESS} 依赖安装完成${COLOR_RESET}"
 
       - name: 🌱 准备基础环境
         run: |
           set -euo pipefail
           if [ ! -d "toolchain" ]; then
-            echo -e "${{ env.COLOR_INFO}}${{ env.ICON_INFO}} 缓存未命中，开始准备基础编译环境...${{ env.COLOR_RESET}}"
-            git clone ${{ env.REPO_URL }} immortalwrt
+            echo -e "${COLOR_INFO}${ICON_INFO} 缓存未命中，开始准备基础编译环境...${COLOR_RESET}"
+            git clone $REPO_URL immortalwrt
             cd immortalwrt
+            # 在 shell 中使用 $inputs
             cat ../configs/base_${{ inputs.chipset }}.config > .config
             cat ../configs/base_${{ inputs.branch }}.config >> .config
-            chmod +x ../${{ env.DIY_P2_SH }}
-            ../${{ env.DIY_P2_SH }}
+            chmod +x ../${DIY_P2_SH}
+            ../${DIY_P2_SH}
             ./scripts/feeds update -a
             ./scripts/feeds install -a
             make defconfig
-            make toolchain/install -j$(nproc) || make toolchain/install -j1 # 如果并行失败，尝试单线程
-            echo -e "${{ env.COLOR_SUCCESS}}${{ env.ICON_SUCCESS}} 基础环境准备完成，已缓存。${{ env.COLOR_RESET}}"
+            make toolchain/install -j$(nproc) || make toolchain/install -j1
+            echo -e "${COLOR_SUCCESS}${ICON_SUCCESS} 基础环境准备完成，已缓存。${COLOR_RESET}"
           else
-            echo -e "${{ env.COLOR_SUCCESS}}${{ env.ICON_SUCCESS}} 缓存命中，跳过基础环境准备。${{ env.COLOR_RESET}}"
-            # 即使缓存命中，也需要检出源码
-            git clone ${{ env.REPO_URL }} immortalwrt
+            echo -e "${COLOR_SUCCESS}${ICON_SUCCESS} 缓存命中，跳过基础环境准备。${COLOR_RESET}"
+            git clone $REPO_URL immortalwrt
           fi
 
       - name: 🏗️ 编译固件 (${{ inputs.profile }})
@@ -124,58 +125,50 @@ jobs:
           LOG_FILE="build_${{ inputs.profile }}.log"
           cd immortalwrt
           
-          echo -e "${{ env.COLOR_INFO}}${{ env.ICON_INFO}} ---------- 开始编译配置: ${{ inputs.profile }} ----------${{ env.COLOR_RESET}}" | tee "../${{ env.UPLOAD_LOGS_DIR }}/$LOG_FILE"
+          echo -e "${COLOR_INFO}${ICON_INFO} ---------- 开始编译配置: ${{ inputs.profile }} ----------${COLOR_RESET}" | tee "../${UPLOAD_LOGS_DIR}/$LOG_FILE"
           
-          # 1. 合并配置
-          echo -e "${{ env.COLOR_INFO}}${{ env.ICON_INFO}} 步骤 1: 合并配置文件...${{ env.COLOR_RESET}}" | tee -a "../${{ env.UPLOAD_LOGS_DIR }}/$LOG_FILE"
+          echo -e "${COLOR_INFO}${ICON_INFO} 步骤 1: 合并配置文件...${COLOR_RESET}" | tee -a "../${UPLOAD_LOGS_DIR}/$LOG_FILE"
           cat ../configs/${{ inputs.profile }}.config >> .config
           
-          # 2. 检查 LuCI 软件包
-          echo -e "${{ env.COLOR_INFO}}${{ env.ICON_INFO}} 步骤 2: 检查 LuCI 软件包依赖...${{ env.COLOR_RESET}}" | tee -a "../${{ env.UPLOAD_LOGS_DIR }}/$LOG_FILE"
+          echo -e "${COLOR_INFO}${ICON_INFO} 步骤 2: 检查 LuCI 软件包依赖...${COLOR_RESET}" | tee -a "../${UPLOAD_LOGS_DIR}/$LOG_FILE"
           chmod +x ../scripts/check_luci.sh
-          ../scripts/check_luci.sh .config | tee -a "../${{ env.UPLOAD_LOGS_DIR }}/$LOG_FILE"
+          ../scripts/check_luci.sh .config | tee -a "../${UPLOAD_LOGS_DIR}/$LOG_FILE"
           
-          # 3. 开始编译
-          echo -e "${{ env.COLOR_INFO}}${{ env.ICON_INFO}} 步骤 3: 开始编译固件...${{ env.COLOR_RESET}}" | tee -a "../${{ env.UPLOAD_LOGS_DIR }}/$LOG_FILE"
-          make -j$(nproc) | tee -a "../${{ env.UPLOAD_LOGS_DIR }}/$LOG_FILE"
+          echo -e "${COLOR_INFO}${ICON_INFO} 步骤 3: 开始编译固件...${COLOR_RESET}" | tee -a "../${UPLOAD_LOGS_DIR}/$LOG_FILE"
+          make -j$(nproc) | tee -a "../${UPLOAD_LOGS_DIR}/$LOG_FILE"
           
-          # 4. 运行 DIY 脚本
-          echo -e "${{ env.COLOR_INFO}}${{ env.ICON_INFO}} 步骤 4: 执行 DIY 脚本...${{ env.COLOR_RESET}}" | tee -a "../${{ env.UPLOAD_LOGS_DIR }}/$LOG_FILE"
-          chmod +x ../${{ env.DIY_P1_SH }}
-          ../${{ env.DIY_P1_SH }}
+          echo -e "${COLOR_INFO}${ICON_INFO} 步骤 4: 执行 DIY 脚本...${COLOR_RESET}" | tee -a "../${UPLOAD_LOGS_DIR}/$LOG_FILE"
+          chmod +x ../${DIY_P1_SH}
+          ../${DIY_P1_SH}
           
-          echo -e "${{ env.COLOR_SUCCESS}}${{ env.ICON_SUCCESS}} ---------- 配置 ${{ inputs.profile }} 编译完成 ----------${{ env.COLOR_RESET}}" | tee -a "../${{ env.UPLOAD_LOGS_DIR }}/$LOG_FILE"
+          echo -e "${COLOR_SUCCESS}${ICON_SUCCESS} ---------- 配置 ${{ inputs.profile }} 编译完成 ----------${COLOR_RESET}" | tee -a "../${UPLOAD_LOGS_DIR}/$LOG_FILE"
 
       - name: 📦 收集并重命名产物
         if: steps.compile.outcome == 'success'
         run: |
           set -euo pipefail
           cd immortalwrt
-          # 创建临时目录
-          mkdir -p "../${{ env.UPLOAD_FIRMWARE_DIR }}"
-          mkdir -p "../${{ env.UPLOAD_CONFIG_DIR }}"
-          mkdir -p "../${{ env.UPLOAD_PACKAGES_DIR }}"
+          mkdir -p "../${UPLOAD_FIRMWARE_DIR}"
+          mkdir -p "../${UPLOAD_CONFIG_DIR}"
+          mkdir -p "../${UPLOAD_PACKAGES_DIR}"
           
           # 从 inputs.devices 中获取设备列表
           DEVICES="${{ inputs.devices }}"
           for DEVICE in $DEVICES; do
-            # 复制并重命名固件
             find bin/targets/*/* -type f \( -name "*${DEVICE}*-squashfs-sysupgrade.bin" -o -name "*${DEVICE}*-squashfs-factory.bin" \) | while read -r f; do
               if [[ "$f" =~ .*-squashfs-(sysupgrade|factory)\.bin$ ]]; then
                 TYPE="${BASH_REMATCH[1]}"
                 NEW_NAME="${{ inputs.branch }}-${DEVICE}-${TYPE}-${{ inputs.profile }}.bin"
-                cp "$f" "../${{ env.UPLOAD_FIRMWARE_DIR }}/$NEW_NAME"
-                echo -e "${{ env.COLOR_INFO}}${{ env.ICON_INFO}} 固件已重命名: $NEW_NAME${{ env.COLOR_RESET}}"
+                cp "$f" "../${UPLOAD_FIRMWARE_DIR}/$NEW_NAME"
+                echo -e "${COLOR_INFO}${ICON_INFO} 固件已重命名: $NEW_NAME${COLOR_RESET}"
               fi
             done
-            # 复制配置、清单等信息
-            cp .config "../${{ env.UPLOAD_CONFIG_DIR }}/${{ inputs.branch }}-${{ inputs.chipset }}-${DEVICE}-${{ inputs.profile }}.config"
-            cp bin/targets/*/*/${DEVICE}.manifest "../${{ env.UPLOAD_CONFIG_DIR }}/${{ inputs.branch }}-${{ inputs.chipSET }}-${DEVICE}-${{ inputs.profile }}.manifest"
-            cp .config.buildinfo "../${{ env.UPLOAD_CONFIG_DIR }}/${{ inputs.branch }}-${{ inputs.chipset }}-${DEVICE}-${{ inputs.profile }}.config.buildinfo"
+            cp .config "../${UPLOAD_CONFIG_DIR}/${{ inputs.branch }}-${{ inputs.chipset }}-${DEVICE}-${{ inputs.profile }}.config"
+            cp bin/targets/*/*/${DEVICE}.manifest "../${UPLOAD_CONFIG_DIR}/${{ inputs.branch }}-${{ inputs.chipset }}-${DEVICE}-${{ inputs.profile }}.manifest"
+            cp .config.buildinfo "../${UPLOAD_CONFIG_DIR}/${{ inputs.branch }}-${{ inputs.chipset }}-${DEVICE}-${{ inputs.profile }}.config.buildinfo"
           done
           
-          # 复制所有 ipk 文件
-          cp bin/packages/**/*.ipk ../${{ env.UPLOAD_PACKAGES_DIR }}/ 2>/dev/null || true
+          cp bin/packages/**/*.ipk ../${UPLOAD_PACKAGES_DIR}/ 2>/dev/null || true
 
       - name: 📤 上传产物
         uses: actions/upload-artifact@v4
