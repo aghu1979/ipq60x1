@@ -1,3 +1,4 @@
+# .github/workflows/dispatch.yml
 name: 调度中心
 
 on:
@@ -14,29 +15,31 @@ on:
           - ubuntu-22.04
           - ubuntu-24.04
 
-# 将权限提升到 workflow 级别，这是最标准的写法
-permissions:
-  contents: write
-  releases: write
-
-# 全局环境变量
+# 全局环境变量 (仅用于在 job 的 env 中引用)
 env:
-  CHIPSET: ipq60xx
-  BRANCH: immwrt
-  COLOR_ERROR: '\033[1;31m'
-  COLOR_WARN: '\033[1;33m'
-  COLOR_INFO: '\033[1;36m'
-  COLOR_SUCCESS: '\033[1;32m'
-  COLOR_RESET: '\033[0m'
-  ICON_ERROR: '❌'
-  ICON_WARN: '⚠️'
-  ICON_INFO: 'ℹ️'
-  ICON_SUCCESS: '✅'
+  CHIPSET_NAME: ipq60xx
+  BRANCH_NAME: immwrt
 
 jobs:
   setup:
     name: 📋 准备工作
     runs-on: ubuntu-latest
+    # 在 job 级别声明权限
+    permissions:
+      contents: read
+    # 在 job 级别定义所有 env 变量，供 run 脚本使用
+    env:
+      CHIPSET: ${{ env.CHIPSET_NAME }}
+      BRANCH: ${{ env.BRANCH_NAME }}
+      COLOR_ERROR: '\033[1;31m'
+      COLOR_WARN: '\033[1;33m'
+      COLOR_INFO: '\033[1;36m'
+      COLOR_SUCCESS: '\033[1;32m'
+      COLOR_RESET: '\033[0m'
+      ICON_ERROR: '❌'
+      ICON_WARN: '⚠️'
+      ICON_INFO: 'ℹ️'
+      ICON_SUCCESS: '✅'
     outputs:
       hashes-value: ${{ steps.generate-hashes.outputs.hashes-value }}
       devices: ${{ steps.get-devices.outputs.devices }}
@@ -48,61 +51,48 @@ jobs:
       - name: 🔑 生成哈希文件
         id: generate-hashes
         run: |
-          # 将所有 env 变量显式赋值给 shell 变量，以兼容静态分析器
-          CHIPSET_VAR="${{ env.CHIPSET }}"
-          BRANCH_VAR="${{ env.BRANCH }}"
-          COLOR_ERROR_VAR="${{ env.COLOR_ERROR }}"
-          COLOR_SUCCESS_VAR="${{ env.COLOR_SUCCESS }}"
-          ICON_ERROR_VAR="${{ env.ICON_ERROR }}"
-          ICON_SUCCESS_VAR="${{ env.ICON_SUCCESS }}"
-          
+          # 直接使用 job 级别定义的 env 变量，无需 ${{}}
           set -euo pipefail
           HASH_FILES=(
-            "configs/base_${CHIPSET_VAR}.config"
-            "configs/base_${BRANCH_VAR}.config"
+            "configs/base_${CHIPSET}.config"
+            "configs/base_${BRANCH}.config"
             "scripts/diy.sh"
             "scripts/repo.sh"
           )
           for file in "${HASH_FILES[@]}"; do
             if [ ! -f "$file" ]; then
-              echo -e "${COLOR_ERROR_VAR}${ICON_ERROR_VAR} 错误: 文件 $file 不存在！${COLOR_RESET}"
+              echo -e "${COLOR_ERROR}${ICON_ERROR} 错误: 文件 $file 不存在！${COLOR_RESET}"
               exit 1
             fi
           done
           HASH_VALUE=$(cat "${HASH_FILES[@]}" | sha256sum | cut -d' ' -f1)
           echo "hashes-value=$HASH_VALUE" >> $GITHUB_OUTPUT
-          echo -e "${COLOR_SUCCESS_VAR}${ICON_SUCCESS_VAR} 缓存哈希值: $HASH_VALUE${COLOR_RESET}"
+          echo -e "${COLOR_SUCCESS}${ICON_SUCCESS} 缓存哈希值: $HASH_VALUE${COLOR_RESET}"
 
       - name: 🔍 提取设备列表
         id: get-devices
         run: |
-          CHIPSET_VAR="${{ env.CHIPSET }}"
-          COLOR_SUCCESS_VAR="${{ env.COLOR_SUCCESS }}"
-          ICON_SUCCESS_VAR="${{ env.ICON_SUCCESS }}"
-
           set -euo pipefail
-          DEVICES=$(grep -oE 'CONFIG_TARGET_DEVICE_.*_DEVICE_(.*)=y' "configs/base_${CHIPSET_VAR}.config" | sed -E 's/CONFIG_TARGET_DEVICE_.*_DEVICE_(.*)=y/\1/' | tr '\n' ' ')
+          DEVICES=$(grep -oE 'CONFIG_TARGET_DEVICE_.*_DEVICE_(.*)=y' "configs/base_${CHIPSET}.config" | sed -E 's/CONFIG_TARGET_DEVICE_.*_DEVICE_(.*)=y/\1/' | tr '\n' ' ')
           echo "devices=$DEVICES" >> $GITHUB_OUTPUT
-          echo -e "${COLOR_SUCCESS_VAR}${ICON_SUCCESS_VAR} 发现设备: $DEVICES${COLOR_RESET}"
+          echo -e "${COLOR_SUCCESS}${ICON_SUCCESS} 发现设备: $DEVICES${COLOR_RESET}"
           
       - name: 🔍 获取内核版本
         id: get-kernel
         run: |
-          CHIPSET_VAR="${{ env.CHIPSET }}"
-          COLOR_SUCCESS_VAR="${{ env.COLOR_SUCCESS }}"
-          ICON_SUCCESS_VAR="${{ env.ICON_SUCCESS }}"
-
           set -euo pipefail
           git clone --depth=1 https://github.com/immortalwrt/immortalwrt
           cd immortalwrt
-          echo "CONFIG_TARGET_${CHIPSET_VAR}=y" > .config
+          echo "CONFIG_TARGET_${CHIPSET}=y" > .config
           KERNEL_VERSION=$(make kernelconfig | grep -oP 'CONFIG_KERNEL_\K[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
           echo "kernel-version=$KERNEL_VERSION" >> $GITHUB_OUTPUT
-          echo -e "${COLOR_SUCCESS_VAR}${ICON_SUCCESS_VAR} 内核版本: $KERNEL_VERSION${COLOR_RESET}"
+          echo -e "${COLOR_SUCCESS}${ICON_SUCCESS} 内核版本: $KERNEL_VERSION${COLOR_RESET}"
 
   build-firmware:
     name: 🏗️ 构建 ${{ matrix.profile }} 配置
     needs: setup
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -110,8 +100,8 @@ jobs:
     uses: ./.github/workflows/reusable_builder.yml
     with:
       os_version: ${{ inputs.os_version || 'ubuntu-22.04' }}
-      chipset: ${{ env.CHIPSET }}
-      branch: ${{ env.BRANCH }}
+      chipset: ${{ env.CHIPSET_NAME }}
+      branch: ${{ env.BRANCH_NAME }}
       profile: ${{ matrix.profile }}
       hashes-value: ${{ needs.setup.outputs.hashes-value }}
       devices: ${{ needs.setup.outputs.devices }}
@@ -122,7 +112,13 @@ jobs:
     if: always() && needs.setup.result == 'success'
     needs: [setup, build-firmware]
     runs-on: ubuntu-latest
-    # 此处的 permissions 已移至 workflow 顶层
+    # 在 job 级别声明权限
+    permissions:
+      contents: write
+      releases: write
+    env:
+      CHIPSET: ${{ env.CHIPSET_NAME }}
+      BRANCH: ${{ env.BRANCH_NAME }}
     steps:
       - name: ⬇️ 检出代码
         uses: actions/checkout@v4
@@ -135,26 +131,25 @@ jobs:
 
       - name: 📦 打包最终产物
         run: |
-          CHIPSET_VAR="${{ env.CHIPSET }}"
           set -euo pipefail
           mkdir -p release_assets
-          tar -czvf release_assets/${CHIPSET_VAR}-config.tar.gz -C all_artifacts config/
-          tar -czvf release_assets/${CHIPSET_VAR}-app.tar.gz -C all_artifacts packages/
-          tar -czvf release_assets/${CHIPSET_VAR}-log.tar.gz -C all_artifacts logs/
-          cp -r all_artifacts/firmware/* release_assets/ || true # 如果没有固件则跳过
+          tar -czvf release_assets/${CHIPSET}-config.tar.gz -C all_artifacts config/
+          tar -czvf release_assets/${CHIPSET}-app.tar.gz -C all_artifacts packages/
+          tar -czvf release_assets/${CHIPSET}-log.tar.gz -C all_artifacts logs/
+          cp -r all_artifacts/firmware/* release_assets/ || true
           
-          tar -tzf release_assets/${CHIPSET_VAR}-app.tar.gz | grep luci-app | sed 's/.*\///' | sort | uniq > release_assets/luci_apps_list.txt
+          tar -tzf release_assets/${CHIPSET}-app.tar.gz | grep luci-app | sed 's/.*\///' | sort | uniq > release_assets/luci_apps_list.txt
 
       - name: 🚀 发布到 GitHub Release
         if: needs.build-firmware.result == 'success'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.CHIPSET }}-${{ github.run_number }}-${{ github.sha }}
+          tag_name: ${{ env.CHIPSET_NAME }}-${{ github.run_number }}-${{ github.sha }}
           body: |
-            ## 🎉 ImmortalWrt ${{ env.CHIPSET }} 固件发布
+            ## 🎉 ImmortalWrt ${{ env.CHIPSET_NAME }} 固件发布
             - **作者**: Mary
             - **发布时间**: ${{ github.event.head_commit.timestamp }}
-            - **源码分支**: ${{ env.BRANCH }}
+            - **源码分支**: ${{ env.BRANCH_NAME }}
             - **编译配置**: Pro, Max, Ultra
             - **内核版本**: ${{ needs.setup.outputs.kernel-version }}
             
@@ -176,9 +171,9 @@ jobs:
             ## ⬇️ 下载说明
             请根据您的设备型号和所需配置下载对应的固件文件。
             - `immwrt-<设备名>-<factory/sysupgrade>-<Pro/Max/Ultra>.bin` 是固件文件。
-            - `${{ env.CHIPSET }}-config.tar.gz` 包含所有配置、清单和构建信息。
-            - `${{ env.CHIPSET }}-app.tar.gz` 包含所有编译出的软件包。
-            - `${{ env.CHIPSET }}-log.tar.gz` 包含本次编译的详细日志。
+            - `${{ env.CHIPSET_NAME }}-config.tar.gz` 包含所有配置、清单和构建信息。
+            - `${{ env.CHIPSET_NAME }}-app.tar.gz` 包含所有编译出的软件包。
+            - `${{ env.CHIPSET_NAME }}-log.tar.gz` 包含本次编译的详细日志。
 
           files: |
             release_assets/*
