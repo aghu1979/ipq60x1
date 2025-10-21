@@ -1,182 +1,45 @@
 #!/bin/bash
 # scripts/diy.sh
+# 功能: 定制固件的初始设置
+# 作者: Mary
 
-# 启用严格模式：遇到错误立即退出，未定义的变量视为错误
+# 设置严格模式
 set -euo pipefail
 
-# --- 主逻辑 ---
-main() {
-    # 接收从 workflow 传入的参数
-    local branch_name="${1:-openwrt}"
-    local soc_name="${2:-ipq60xx}"
+# 定义颜色和图标
+COLOR_INFO='\033[1;36m'
+COLOR_SUCCESS='\033[1;32m'
+COLOR_RESET='\033[0m'
+ICON_INFO='ℹ️'
+ICON_SUCCESS='✅'
 
-    echo "=========================================="
-    echo " DIY Script for OpenWrt"
-    echo " Branch: ${branch_name}"
-    echo " SoC:     ${soc_name}"
-    echo "=========================================="
+echo -e "${COLOR_INFO}${ICON_INFO} 开始执行 DIY 脚本...${COLOR_RESET}"
 
-    # 步骤 1: 修改默认IP & 固件名称 & 编译署名
-    echo "==> Step 1: Modifying default settings..."
-    sed -i 's/192.168.1.1/192.168.111.1/g' package/base-files/files/bin/config_generate
-    sed -i "s/hostname='.*'/hostname='WRT'/g" package/base-files/files/bin/config_generate
-    
-    # 增加文件存在性检查，防止在某些分支上因文件不存在而报错
-    local luci_status_file="feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js"
-    if [ -f "$luci_status_file" ]; then
-        sed -i "s/(\(luciversion || ''\))/(\1) + (' \/ Built by Mary')/g" "$luci_status_file"
-        echo "✅ 编译署名已添加到 $luci_status_file"
-    else
-        echo "⚠️ 警告: 文件 $luci_status_file 不存在，跳过添加编译署名。这在不同分支中是正常的。"
-    fi
-    
-    echo "✅ Default settings modified."
+# 1. 修改默认 IP 为 192.168.111.1
+# OpenWrt 的网络配置在 package/base-files/files/etc/config/network
+# 我们使用 sed 命令来查找并替换
+echo -e "${COLOR_INFO}${ICON_INFO} 正在设置默认 IP 为 192.168.111.1...${COLOR_RESET}"
+sed -i 's/192.168.1.1/192.168.111.1/g' package/base-files/files/etc/config/network
 
-    # 步骤 2: 预删除官方软件源缓存
-    echo "==> Step 2: Pre-deleting official package caches..."
-    OFFICIAL_CACHE_PACKAGES=(
-        # laipeng668定制包相关的官方缓存包
-        "package/feeds/packages/golang"
-        # "package/feeds/packages/ariang" # 已移除，因为源中不存在
-        # "package/feeds/packages/frp"   # 已移除，因为源中不存在
-        "package/feeds/packages/adguardhome"
-        "package/feeds/packages/wolplus"
-        "package/feeds/packages/lucky"
-        "package/feeds/packages/wechatpush"
-        "package/feeds/packages/open-app-filter"
-        "package/feeds/packages/gecoosac"
-        # "package/feeds/luci/luci-app-frpc"  # 已移除，因为源中不存在
-        # "package/feeds/luci/luci-app-frps"  # 已移除，因为源中不存在
-        "package/feeds/luci/luci-app-adguardhome"
-        "package/feeds/luci/luci-app-wolplus"
-        "package/feeds/luci/luci-app-lucky"
-        "package/feeds/luci/luci-app-wechatpush"
-        "package/feeds/luci/luci-app-athena-led"
+# 2. 设置默认主机名为 WRT
+# 主机名配置在 package/base-files/files/etc/sysinfo.conf
+echo -e "${COLOR_INFO}${ICON_INFO} 正在设置默认主机名为 WRT...${COLOR_RESET}"
+sed -i 's/OpenWrt/WRT/g' package/base-files/files/etc/sysinfo.conf
 
-        # Mary定制包相关的官方缓存包
-        "package/feeds/packages/netspeedtest"
-        "package/feeds/packages/partexp"
-        "package/feeds/packages/taskplan"
-        "package/feeds/packages/tailscale"
-        "package/feeds/packages/momo"
-        "package/feeds/packages/nikki"
-        "package/feeds/luci/luci-app-netspeedtest"
-        "package/feeds/luci/luci-app-partexp"
-        "package/feeds/luci/luci-app-taskplan"
-        "package/feeds/luci/luci-app-tailscale"
-        "package/feeds/luci/luci-app-momo"
-        "package/feeds/luci/luci-app-nikki"
-        "package/feeds/luci/luci-app-openclash"
-    )
+# 3. 设置默认密码为空
+# 密码存储在 /etc/shadow。root 用户的密码哈希字段在第一个冒号和第二个冒号之间。
+# 将其设置为空，即可实现无密码登录。
+# 注意：这个文件在编译时会被处理，我们修改的是源码模板
+echo -e "${COLOR_INFO}${ICON_INFO} 正在设置 root 密码为空...${COLOR_RESET}"
+# 查找包含 'root:' 的行，并将第一个和第二个冒号之间的内容替换为空
+sed -i 's/root:\$[a-zA-Z0-9\$.\/]*:/root::/g' package/base-files/files/etc/shadow
 
-    for package in "${OFFICIAL_CACHE_PACKAGES[@]}"; do
-        if [ -d "$package" ]; then
-            rm -rf "$package"
-            echo "已删除缓存包: $package"
-        fi
-    done
+# 4. 设置默认 WiFi 密码 (如果需要)
+# WiFi 配置在 package/kernel/mac80211/files/lib/wifi/mac80211.sh
+# 这个比较复杂，通常在编译后通过 LuCI 修改更安全。
+# 这里提供一个示例，但可能因版本而异，需要测试。
+# echo -e "${COLOR_INFO}${ICON_INFO} 正在设置默认 WiFi 密码...${COLOR_RESET}"
+# sed -i 's/ssid=OpenWrt/ssid=ImmortalWrt/g' package/kernel/mac80211/files/lib/wifi/mac80211.sh
+# sed -i 's/#key=passphrase/key=12345678/g' package/kernel/mac80211/files/lib/wifi/mac80211.sh
 
-    # 步骤 3: 预删除feeds工作目录
-    echo "==> Step 3: Pre-deleting feeds working directories..."
-    FEEDS_WORK_PACKAGES=(
-        # laipeng668定制包相关的feeds工作目录
-        "feeds/packages/lang/golang"
-        # "feeds/packages/net/ariang"   # 已移除
-        # "feeds/packages/net/frp"     # 已移除
-        "feeds/packages/net/adguardhome"
-        "feeds/packages/net/wolplus"
-        "feeds/packages/net/lucky"
-        "feeds/packages/net/wechatpush"
-        "feeds/packages/net/open-app-filter"
-        "feeds/packages/net/gecoosac"
-        # "feeds/luci/applications/luci-app-frpc"  # 已移除
-        # "feeds/luci/applications/luci-app-frps"  # 已移除
-        "feeds/luci/applications/luci-app-adguardhome"
-        "feeds/luci/applications/luci-app-wolplus"
-        "feeds/luci/applications/luci-app-lucky"
-        "feeds/luci/applications/luci-app-wechatpush"
-        "feeds/luci/applications/luci-app-athena-led"
-
-        # Mary定制包相关的feeds工作目录
-        "feeds/packages/net/netspeedtest"
-        "feeds/packages/utils/partexp"
-        "feeds/packages/utils/taskplan"
-        "feeds/packages/net/tailscale"
-        "feeds/packages/net/momo"
-        "feeds/packages/net/nikki"
-        "feeds/luci/applications/luci-app-netspeedtest"
-        "feeds/luci/applications/luci-app-partexp"
-        "feeds/luci/applications/luci-app-taskplan"
-        "feeds/luci/applications/luci-app-tailscale"
-        "feeds/luci/applications/luci-app-momo"
-        "feeds/luci/applications/luci-app-nikki"
-        "feeds/luci/applications/luci-app-openclash"
-    )
-
-    for package in "${FEEDS_WORK_PACKAGES[@]}"; do
-        if [ -d "$package" ]; then
-            rm -rf "$package"
-            echo "已删除工作目录包: $package"
-        fi
-    done
-
-    # 步骤 4: 克隆定制化软件包
-    echo "==> Step 4: Cloning custom packages..."
-    # laipeng668定制包 (来自元仓库)
-    git clone --depth=1 https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang
-    git clone --depth=1 https://github.com/sbwml/luci-app-openlist2 package/openlist
-    
-    # 【关键修正】处理来自元仓库的包
-    echo "Cloning from laipeng668/packages meta-repo..."
-    git clone --depth=1 https://github.com/laipeng668/packages.git temp_laipeng_repo
-    # 【关键修正】注释掉不存在的包
-    # mv temp_laipeng_repo/ariang feeds/packages/net/
-    # mv temp_laipeng_repo/frp feeds/packages/net/
-    rm -rf temp_laipeng_repo
-
-    echo "Cloning from laipeng668/luci meta-repo..."
-    git clone --depth=1 https://github.com/laipeng668/luci.git temp_laipeng_luci_repo
-    # 【关键修正】注释掉不存在的包
-    # mv temp_laipeng_luci_repo/luci-app-frpc feeds/luci/applications/
-    # mv temp_laipeng_luci_repo/luci-app-frps feeds/luci/applications/
-    rm -rf temp_laipeng_luci_repo
-
-    # kenzok8定制包 (来自元仓库)
-    git clone --depth=1 https://github.com/kenzok8/openwrt-packages.git temp_kenzok8_repo
-    mv temp_kenzok8_repo/luci-app-adguardhome package/
-    rm -rf temp_kenzok8_repo
-
-    # 【关键修正】处理 luci-app-wolplus
-    echo "Cloning luci-app-wolplus from VIKINGYFY meta-repo..."
-    git clone --depth=1 https://github.com/VIKINGYFY/packages.git temp_vikingyfy_repo
-    mv temp_vikingyfy_repo/luci-app-wolplus feeds/luci/applications/
-    rm -rf temp_vikingyfy_repo
-
-    git clone --depth=1 https://github.com/tty228/luci-app-wechatpush.git package/luci-app-wechatpush
-    git clone --depth=1 https://github.com/destan19/OpenAppFilter.git package/OpenAppFilter
-    git clone --depth=1 https://github.com/lwb1978/openwrt-gecoosac.git package/openwrt-gecoosac
-    git clone --depth=1 https://github.com/NONGFAH/luci-app-athena-led.git package/luci-app-athena-led
-    
-    # Mary定制包 (大部分是单包仓库，可以直接克隆)
-    git clone --depth=1 https://github.com/sirpdboy/luci-app-netspeedtest.git package/netspeedtest
-    git clone --depth=1 https://github.com/sirpdboy/luci-app-partexp.git package/partexp
-    git clone --depth=1 https://github.com/sirpdboy/luci-app-taskplan.git package/taskplan
-    git clone --depth=1 https://github.com/tailscale/tailscale.git package/tailscale
-    git clone --depth=1 https://github.com/nikkinikki-org/OpenWrt-momo.git package/momo
-    git clone --depth=1 https://github.com/nikkinikki-org/OpenWrt-nikki.git package/nikki
-    git clone --depth=1 https://github.com/vernesong/OpenClash.git package/openclash
-
-    # kenzok8软件源（该软件源仅作为查漏补缺，优先级最低，仅在上方软件源未命中feeds中软件包时才提供。)
-    git clone --depth=1 https://github.com/kenzok8/small-package smpackage 
-
-    # 设置权限
-    chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
-    
-    echo "✅ Custom packages cloned."
-
-    # 注意：feeds update 和 install 已移至 build.yml 中，以便利用缓存
-    echo "==> DIY script finished successfully."
-}
-
-# 执行主函数，并传入所有参数
-main "$@"
+echo -e "${COLOR_SUCCESS}${ICON_SUCCESS} DIY 脚本执行完成。${COLOR_RESET}"
