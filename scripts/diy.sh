@@ -37,8 +37,8 @@ main() {
     OFFICIAL_CACHE_PACKAGES=(
         # laipeng668定制包相关的官方缓存包
         "package/feeds/packages/golang"
-        "package/feeds/packages/ariang"
-        "package/feeds/packages/frp"
+        # "package/feeds/packages/ariang" # 已移除，因为源中不存在
+        # "package/feeds/packages/frp"   # 已移除，因为源中不存在
         "package/feeds/packages/adguardhome"
         "package/feeds/packages/wolplus"
         "package/feeds/packages/lucky"
@@ -81,8 +81,8 @@ main() {
     FEEDS_WORK_PACKAGES=(
         # laipeng668定制包相关的feeds工作目录
         "feeds/packages/lang/golang"
-        "feeds/packages/net/ariang"
-        "feeds/packages/net/frp"
+        # "feeds/packages/net/ariang"   # 已移除
+        # "feeds/packages/net/frp"     # 已移除
         "feeds/packages/net/adguardhome"
         "feeds/packages/net/wolplus"
         "feeds/packages/net/lucky"
@@ -129,8 +129,9 @@ main() {
     # 【关键修正】处理来自元仓库的包
     echo "Cloning from laipeng668 meta-repo..."
     git clone --depth=1 https://github.com/laipeng668/packages.git temp_laipeng_repo
-    mv temp_laipeng_repo/ariang feeds/packages/net/
-    mv temp_laipeng_repo/frp feeds/packages/net/
+    # 【关键修正】注释掉不存在的包
+    # mv temp_laipeng_repo/ariang feeds/packages/net/
+    # mv temp_laipeng_repo/frp feeds/packages/net/
     rm -rf temp_laipeng_repo
 
     git clone --depth=1 https://github.com/laipeng668/luci.git temp_laipeng_luci_repo
