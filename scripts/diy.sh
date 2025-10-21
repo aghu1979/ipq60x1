@@ -131,7 +131,6 @@ main() {
     git clone --depth=1 https://github.com/laipeng668/luci.git feeds/luci/applications/luci-app-frps
     git clone --depth=1 https://github.com/kenzok8/openwrt-packages.git package/adguardhome
     git clone --depth=1 https://github.com/kenzok8/openwrt-packages.git package/luci-app-adguardhome
-    # git clone --depth=1 https://github.com/VIKINGYFY/packages.git feeds/luci/applications/luci-app-wolplus
     git clone --depth=1 https://github.com/tty228/luci-app-wechatpush.git package/luci-app-wechatpush
     git clone --depth=1 https://github.com/destan19/OpenAppFilter.git package/OpenAppFilter
     git clone --depth=1 https://github.com/lwb1978/openwrt-gecoosac.git package/openwrt-gecoosac
