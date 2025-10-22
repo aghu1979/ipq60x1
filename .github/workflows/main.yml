@@ -98,13 +98,13 @@ jobs:
           source $GITHUB_WORKSPACE/scripts/common.sh
           step_start "提取设备名"
           
-          # 【修正】先调用函数获取纯净的设备名列表
+          # 先调用函数获取纯净的设备名列表
           devices_list=$(extract_device_names "$GITHUB_WORKSPACE/configs/base_${{ env.CHIPSET }}.config")
           
-          # 【修正】再打印日志，避免污染输出
+          # 再打印日志，避免污染输出
           log_success "提取到的设备列表: ${devices_list}"
           
-          # 【修正】最后设置输出，确保此命令是干净的
+          # 最后设置输出，确保此命令是干净的
           echo "devices=$devices_list" >> $GITHUB_OUTPUT
           
           step_end "提取设备名"
@@ -172,6 +172,9 @@ jobs:
             # 执行该分支的自定义脚本，路径为仓库根目录下的 scripts 文件夹
             log_info "执行 ${repo_short} 的自定义脚本..."
             cd "/workdir/${repo_short}"
+            
+            # 【修正】在执行前为脚本添加执行权限
+            chmod +x "$GITHUB_WORKSPACE/scripts/custom_${repo_short}.sh"
             "$GITHUB_WORKSPACE/scripts/custom_${repo_short}.sh"
             
             # 更新和安装所有软件源
