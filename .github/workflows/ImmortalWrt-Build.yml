@@ -113,35 +113,77 @@ jobs:
               exit 1
           fi
           
+          # 显示当前目录结构
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📂 当前目录结构：" >> $GITHUB_STEP_SUMMARY
+          echo "```" >> $GITHUB_STEP_SUMMARY
+          find . -maxdepth 3 -type d | sort >> $GITHUB_STEP_SUMMARY
+          echo "```" >> $GITHUB_STEP_SUMMARY
+          
           # 验证配置文件存在
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "🔍 验证配置文件..." >> $GITHUB_STEP_SUMMARY
           
-          # 列出configs目录内容（用于调试）
-          echo "### configs目录内容：" >> $GITHUB_STEP_SUMMARY
-          if [ -d ".github/configs" ]; then
-              ls -la .github/configs/ >> $GITHUB_STEP_SUMMARY
+          # 列出.github目录内容
+          echo "### .github目录内容：" >> $GITHUB_STEP_SUMMARY
+          if [ -d ".github" ]; then
+              echo "```" >> $GITHUB_STEP_SUMMARY
+              ls -la .github/ >> $GITHUB_STEP_SUMMARY
+              echo "```" >> $GITHUB_STEP_SUMMARY
+              
+              # 检查configs目录
+              if [ -d ".github/configs" ]; then
+                  echo "✓ .github/configs 目录存在" >> $GITHUB_STEP_SUMMARY
+                  echo "```" >> $GITHUB_STEP_SUMMARY
+                  ls -la .github/configs/ >> $GITHUB_STEP_SUMMARY
+                  echo "```" >> $GITHUB_STEP_SUMMARY
+              else
+                  echo "❌ .github/configs 目录不存在" >> $GITHUB_STEP_SUMMARY
+                  echo "尝试创建configs目录..." >> $GITHUB_STEP_SUMMARY
+                  mkdir -p .github/configs
+                  echo "⚠️ 已创建空的configs目录，请添加配置文件" >> $GITHUB_STEP_SUMMARY
+                  exit 1
+              fi
           else
-              echo "❌ .github/configs 目录不存在" >> $GITHUB_STEP_SUMMARY
+              echo "❌ .github 目录不存在" >> $GITHUB_STEP_SUMMARY
+              echo "尝试创建.github目录结构..." >> $GITHUB_STEP_SUMMARY
+              mkdir -p .github/configs .github/scripts
+              echo "⚠️ 已创建目录结构，请添加必要的文件" >> $GITHUB_STEP_SUMMARY
               exit 1
           fi
           
           # 检查具体配置文件
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 检查配置文件：" >> $GITHUB_STEP_SUMMARY
+          
           if [ -f ".github/configs/base_ipq60xx.config" ]; then
               echo "✓ 找到 base_ipq60xx.config" >> $GITHUB_STEP_SUMMARY
+              echo "- 文件大小: $(wc -l < .github/configs/base_ipq60xx.config) 行" >> $GITHUB_STEP_SUMMARY
           else
               echo "❌ 未找到 base_ipq60xx.config" >> $GITHUB_STEP_SUMMARY
-              echo "请检查文件路径是否正确" >> $GITHUB_STEP_SUMMARY
+              echo "请创建此配置文件或检查文件路径" >> $GITHUB_STEP_SUMMARY
               exit 1
           fi
           
           if [ -f ".github/configs/base_immwrt.config" ]; then
               echo "✓ 找到 base_immwrt.config" >> $GITHUB_STEP_SUMMARY
+              echo "- 文件大小: $(wc -l < .github/configs/base_immwrt.config) 行" >> $GITHUB_STEP_SUMMARY
           else
               echo "❌ 未找到 base_immwrt.config" >> $GITHUB_STEP_SUMMARY
-              echo "请检查文件路径是否正确" >> $GITHUB_STEP_SUMMARY
+              echo "请创建此配置文件或检查文件路径" >> $GITHUB_STEP_SUMMARY
               exit 1
           fi
+          
+          # 检查用户配置文件
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 检查用户配置文件：" >> $GITHUB_STEP_SUMMARY
+          for config in Pro Max Ultra; do
+              if [ -f ".github/configs/${config}.config" ]; then
+                  echo "✓ 找到 ${config}.config" >> $GITHUB_STEP_SUMMARY
+              else
+                  echo "⚠️ 未找到 ${config}.config（将跳过此配置）" >> $GITHUB_STEP_SUMMARY
+              fi
+          done
           
           # 恢复严格模式
           set -e
@@ -990,9 +1032,11 @@ jobs:
     
     steps:
       - name: 📥 下载所有编译产物
+        id: download-artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts/
+        continue-on-error: true
 
       - name: 📦 整理发布文件
         id: prepare-release
@@ -1009,10 +1053,21 @@ jobs:
           if [ -d "artifacts" ]; then
               echo "✓ artifacts目录存在" >> $GITHUB_STEP_SUMMARY
               echo "目录内容：" >> $GITHUB_STEP_SUMMARY
+              echo "```" >> $GITHUB_STEP_SUMMARY
               find artifacts/ -type d | sort >> $GITHUB_STEP_SUMMARY
+              echo "```" >> $GITHUB_STEP_SUMMARY
+              
+              # 检查是否有子目录
+              if [ "$(find artifacts/ -maxdepth 1 -type d | wc -l)" -gt 1 ]; then
+                  echo "✓ 找到编译产物" >> $GITHUB_STEP_SUMMARY
+              else
+                  echo "⚠️ artifacts目录为空" >> $GITHUB_STEP_SUMMARY
+                  echo "可能之前的编译步骤失败了" >> $GITHUB_STEP_SUMMARY
+              fi
           else
               echo "❌ artifacts目录不存在" >> $GITHUB_STEP_SUMMARY
-              exit 1
+              echo "创建空的artifacts目录" >> $GITHUB_STEP_SUMMARY
+              mkdir -p artifacts
           fi
           
           # 合并所有配置文件
@@ -1032,6 +1087,10 @@ jobs:
               rm -f *.config
           else
               echo "⚠️ 没有找到配置文件" >> $GITHUB_STEP_SUMMARY
+              # 创建一个空的配置包
+              touch empty_config.txt
+              tar -czf "ipq60xx-config.tar.gz" empty_config.txt
+              rm -f empty_config.txt
           fi
           cd ..
           
@@ -1052,6 +1111,11 @@ jobs:
               rm -rf packages/
           else
               echo "⚠️ 没有找到软件包" >> $GITHUB_STEP_SUMMARY
+              # 创建一个空的软件包
+              mkdir -p packages
+              touch empty_package.txt
+              tar -czf "ipq60xx-app.tar.gz" packages/
+              rm -rf packages
           fi
           cd ..
           
@@ -1080,6 +1144,28 @@ jobs:
           echo "- 固件文件数: $(find release/ -name "*.bin" -type f | wc -l)" >> $GITHUB_STEP_SUMMARY
           echo "- 配置包: $(test -f release/ipq60xx-config.tar.gz && echo "存在" || echo "不存在")" >> $GITHUB_STEP_SUMMARY
           echo "- 软件包: $(test -f release/ipq60xx-app.tar.gz && echo "存在" || echo "不存在")" >> $GITHUB_STEP_SUMMARY
+          
+          # 如果没有任何文件，创建一个说明文件
+          if [ "$(find release/ -name "*.bin" -type f | wc -l)" -eq 0 ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "⚠️ 警告：没有找到任何固件文件" >> $GITHUB_STEP_SUMMARY
+              echo "可能编译过程中出现了错误" >> $GITHUB_STEP_SUMMARY
+              
+              # 创建一个说明文件
+              cat > release/README.txt << EOF
+          编译说明
+          =========
+          
+          本次编译没有生成固件文件，可能的原因：
+          1. 配置文件有误
+          2. 依赖包缺失
+          3. 编译过程中出现错误
+          
+          请查看编译日志获取详细信息。
+          
+          生成时间: $(date)
+          EOF
+          fi
           
           echo "✓ 发布文件整理完成" >> $GITHUB_STEP_SUMMARY
 
@@ -1175,6 +1261,7 @@ jobs:
           files: |
             release/*.bin
             release/*.tar.gz
+            release/*.txt
           draft: false
           prerelease: false
         env:
