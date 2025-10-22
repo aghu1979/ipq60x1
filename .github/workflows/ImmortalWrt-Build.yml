@@ -53,7 +53,7 @@ jobs:
     runs-on: ubuntu-${{ github.event.inputs.ubuntu_version || '22.04' }}
     outputs:
       cache-key-base: ${{ steps.cache-key-base.outputs.key }}
-      cache-key-dl: ${{ steps.cache-key-dl.outputs.key }}
+      cache-key-dl: ${{ steps.cache-key-base.outputs.dl-key }}
       device-list: ${{ steps.parse-devices.outputs.devices }}
       kernel-version: ${{ steps.get-kernel.outputs.version }}
       build-date: ${{ steps.get-date.outputs.date }}
@@ -77,9 +77,28 @@ jobs:
           echo "## 📊 初始磁盘空间" >> $GITHUB_STEP_SUMMARY
           df -h | tee -a $GITHUB_STEP_SUMMARY
           
-          # 创建日志目录
+          # 创建必要的目录
+          echo "📁 创建工作目录..." >> $GITHUB_STEP_SUMMARY
           mkdir -p ${{ env.LOG_DIR }}
+          mkdir -p ${{ env.CACHE_DIR }}
           echo "✓ 创建日志目录: ${{ env.LOG_DIR }}" >> $GITHUB_STEP_SUMMARY
+          echo "✓ 创建缓存目录: ${{ env.CACHE_DIR }}" >> $GITHUB_STEP_SUMMARY
+          
+          # 验证配置文件存在
+          echo "🔍 验证配置文件..." >> $GITHUB_STEP_SUMMARY
+          if [ -f ".github/configs/base_ipq60xx.config" ]; then
+              echo "✓ 找到 base_ipq60xx.config" >> $GITHUB_STEP_SUMMARY
+          else
+              echo "❌ 未找到 base_ipq60xx.config" >> $GITHUB_STEP_SUMMARY
+              exit 1
+          fi
+          
+          if [ -f ".github/configs/base_immwrt.config" ]; then
+              echo "✓ 找到 base_immwrt.config" >> $GITHUB_STEP_SUMMARY
+          else
+              echo "❌ 未找到 base_immwrt.config" >> $GITHUB_STEP_SUMMARY
+              exit 1
+          fi
 
       - name: 🐧 安装依赖
         id: install-deps
@@ -138,8 +157,23 @@ jobs:
       - name: 🔑 生成缓存键
         id: cache-key-base
         run: |
+          set -e  # 严格错误退出
+          
           # 生成基础环境缓存键
           echo "## 🔑 生成缓存键" >> $GITHUB_STEP_SUMMARY
+          
+          # 验证配置文件存在
+          if [ ! -f ".github/configs/base_ipq60xx.config" ]; then
+              echo "❌ 错误：找不到 .github/configs/base_ipq60xx.config" >> $GITHUB_STEP_SUMMARY
+              echo "请确保配置文件存在于正确的位置" >> $GITHUB_STEP_SUMMARY
+              exit 1
+          fi
+          
+          if [ ! -f ".github/configs/base_immwrt.config" ]; then
+              echo "❌ 错误：找不到 .github/configs/base_immwrt.config" >> $GITHUB_STEP_SUMMARY
+              echo "请确保配置文件存在于正确的位置" >> $GITHUB_STEP_SUMMARY
+              exit 1
+          fi
           
           # 基础配置哈希
           BASE_CONFIG_HASH=$(cat .github/configs/base_ipq60xx.config .github/configs/base_immwrt.config | sha256sum | cut -d' ' -f1)
@@ -155,6 +189,12 @@ jobs:
           
           echo "- 基础环境缓存键: ${BASE_CACHE_KEY}" >> $GITHUB_STEP_SUMMARY
           echo "- DL缓存键: ${DL_CACHE_KEY}" >> $GITHUB_STEP_SUMMARY
+          echo "- 配置哈希: ${BASE_CONFIG_HASH:0:16}..." >> $GITHUB_STEP_SUMMARY
+          
+          # 保存缓存键到文件，供后续步骤使用
+          echo "${BASE_CACHE_KEY}" > ${{ env.CACHE_DIR }}/base_cache_key.txt
+          echo "${DL_CACHE_KEY}" > ${{ env.CACHE_DIR }}/dl_cache_key.txt
+          echo "✓ 缓存键已保存" >> $GITHUB_STEP_SUMMARY
 
       - name: 📦 检出DL缓存（下载文件）
         id: cache-dl
@@ -187,13 +227,17 @@ jobs:
           
           echo "## 📥 缓存未命中，开始准备基础环境" >> $GITHUB_STEP_SUMMARY
           
+          # 创建日志文件
+          CONFIG_LOG="${{ env.LOG_DIR }}/config_merge.log"
+          touch $CONFIG_LOG
+          echo "✓ 创建配置日志: $CONFIG_LOG" >> $GITHUB_STEP_SUMMARY
+          
           # 克隆源码
           echo "📥 克隆 immwrt 源码..." | tee -a ${{ env.LOG_DIR }}/clone.log
           git clone ${{ env.REPO_URL }} -b ${{ env.REPO_BRANCH }} openwrt 2>&1 | tee -a ${{ env.LOG_DIR }}/clone.log
-          cd openwrt
           
           # 验证克隆
-          if [ ! -f "Makefile" ]; then
+          if [ ! -f "openwrt/Makefile" ]; then
               echo "❌ 源码克隆失败！" | tee -a ${{ env.LOG_DIR }}/clone.log
               exit 1
           fi
@@ -209,8 +253,11 @@ jobs:
           
           echo "## 🔧 合并基础配置文件" >> $GITHUB_STEP_SUMMARY
           
+          # 确保日志目录存在
+          mkdir -p ../${{ env.LOG_DIR }}
+          CONFIG_LOG="../${{ env.LOG_DIR }}/config_merge.log"
+          
           # 创建配置合并日志
-          CONFIG_LOG="${{ env.LOG_DIR }}/config_merge.log"
           echo "=== 基础配置合并过程 ===" > $CONFIG_LOG
           echo "时间: $(date)" >> $CONFIG_LOG
           echo "" >> $CONFIG_LOG
@@ -220,6 +267,7 @@ jobs:
           if [ -f "../.github/configs/base_ipq60xx.config" ]; then
               cat ../.github/configs/base_ipq60xx.config >> .config
               echo "✓ 已应用 base_ipq60xx.config" | tee -a $CONFIG_LOG
+              echo "- 配置行数: $(wc -l < ../.github/configs/base_ipq60xx.config)" >> $CONFIG_LOG
           else
               echo "❌ 未找到 base_ipq60xx.config" | tee -a $CONFIG_LOG
               exit 1
@@ -231,6 +279,7 @@ jobs:
           if [ -f "../.github/configs/base_immwrt.config" ]; then
               cat ../.github/configs/base_immwrt.config >> .config
               echo "✓ 已应用 base_immwrt.config" | tee -a $CONFIG_LOG
+              echo "- 配置行数: $(wc -l < ../.github/configs/base_immwrt.config)" >> $CONFIG_LOG
           else
               echo "❌ 未找到 base_immwrt.config" | tee -a $CONFIG_LOG
               exit 1
@@ -265,7 +314,7 @@ jobs:
           echo "## 🔍 基础配置luci软件包分析" >> $GITHUB_STEP_SUMMARY
           
           # 创建luci分析日志
-          LUCI_LOG="${{ env.LOG_DIR }}/luci_analysis.log"
+          LUCI_LOG="../${{ env.LOG_DIR }}/luci_analysis.log"
           echo "=== 基础配置luci软件包分析 ===" > $LUCI_LOG
           echo "时间: $(date)" >> $LUCI_LOG
           echo "" >> $LUCI_LOG
@@ -309,9 +358,9 @@ jobs:
           
           # 执行diy.sh脚本
           if [ -f "../${{ env.DIY_P1_SH }}" ]; then
-              echo "🔧 执行 diy.sh..." | tee -a ${{ env.LOG_DIR }}/diy.log
+              echo "🔧 执行 diy.sh..." | tee -a ../${{ env.LOG_DIR }}/diy.log
               chmod +x "../${{ env.DIY_P1_SH }}"
-              "../${{ env.DIY_P1_SH }}" 2>&1 | tee -a ${{ env.LOG_DIR }}/diy.log
+              "../${{ env.DIY_P1_SH }}" 2>&1 | tee -a ../${{ env.LOG_DIR }}/diy.log
               echo "✓ DIY配置完成" >> $GITHUB_STEP_SUMMARY
           else
               echo "⚠️ 未找到 diy.sh，跳过DIY配置" >> $GITHUB_STEP_SUMMARY
@@ -319,9 +368,9 @@ jobs:
           
           # 执行repo.sh脚本
           if [ -f "../${{ env.DIY_P2_SH }}" ]; then
-              echo "🔧 执行 repo.sh..." | tee -a ${{ env.LOG_DIR }}/repo.log
+              echo "🔧 执行 repo.sh..." | tee -a ../${{ env.LOG_DIR }}/repo.log
               chmod +x "../${{ env.DIY_P2_SH }}"
-              "../${{ env.DIY_P2_SH }}" 2>&1 | tee -a ${{ env.LOG_DIR }}/repo.log
+              "../${{ env.DIY_P2_SH }}" 2>&1 | tee -a ../${{ env.LOG_DIR }}/repo.log
               echo "✓ 第三方源配置完成" >> $GITHUB_STEP_SUMMARY
           else
               echo "⚠️ 未找到 repo.sh，跳过第三方源配置" >> $GITHUB_STEP_SUMMARY
@@ -338,8 +387,8 @@ jobs:
           echo "## 🔄 更新和安装Feeds" >> $GITHUB_STEP_SUMMARY
           
           # 更新feeds
-          echo "📦 更新feeds..." | tee -a ${{ env.LOG_DIR }}/feeds_update.log
-          ./scripts/feeds update -a 2>&1 | tee -a ${{ env.LOG_DIR }}/feeds_update.log
+          echo "📦 更新feeds..." | tee -a ../${{ env.LOG_DIR }}/feeds_update.log
+          ./scripts/feeds update -a 2>&1 | tee -a ../${{ env.LOG_DIR }}/feeds_update.log
           
           # 检查更新结果
           if [ ${PIPESTATUS[0]} -eq 0 ]; then
@@ -347,13 +396,13 @@ jobs:
           else
               echo "❌ Feeds更新失败！" >> $GITHUB_STEP_SUMMARY
               echo "### 错误详情（最后50行）" >> $GITHUB_STEP_SUMMARY
-              tail -50 ${{ env.LOG_DIR }}/feeds_update.log >> $GITHUB_STEP_SUMMARY
+              tail -50 ../${{ env.LOG_DIR }}/feeds_update.log >> $GITHUB_STEP_SUMMARY
               exit 1
           fi
           
           # 安装feeds
-          echo "📦 安装feeds..." | tee -a ${{ env.LOG_DIR }}/feeds_install.log
-          ./scripts/feeds install -a 2>&1 | tee -a ${{ env.LOG_DIR }}/feeds_install.log
+          echo "📦 安装feeds..." | tee -a ../${{ env.LOG_DIR }}/feeds_install.log
+          ./scripts/feeds install -a 2>&1 | tee -a ../${{ env.LOG_DIR }}/feeds_install.log
           
           # 检查安装结果
           if [ ${PIPESTATUS[0]} -eq 0 ]; then
@@ -361,7 +410,7 @@ jobs:
           else
               echo "❌ Feeds安装失败！" >> $GITHUB_STEP_SUMMARY
               echo "### 错误详情（最后50行）" >> $GITHUB_STEP_SUMMARY
-              tail -50 ${{ env.LOG_DIR }}/feeds_install.log >> $GITHUB_STEP_SUMMARY
+              tail -50 ../${{ env.LOG_DIR }}/feeds_install.log >> $GITHUB_STEP_SUMMARY
               exit 1
           fi
 
@@ -379,21 +428,21 @@ jobs:
           cp .config .config.pre-defconfig
           
           # 执行defconfig
-          echo "🔧 执行 make defconfig..." | tee -a ${{ env.LOG_DIR }}/defconfig.log
-          make defconfig 2>&1 | tee -a ${{ env.LOG_DIR }}/defconfig.log
+          echo "🔧 执行 make defconfig..." | tee -a ../${{ env.LOG_DIR }}/defconfig.log
+          make defconfig 2>&1 | tee -a ../${{ env.LOG_DIR }}/defconfig.log
           
           # 检查defconfig结果
           if [ ${PIPESTATUS[0]} -eq 0 ]; then
               echo "✓ make defconfig 成功" >> $GITHUB_STEP_SUMMARY
           else
               echo "❌ make defconfig 失败！" >> $GITHUB_STEP_SUMMARY
-              tail -50 ${{ env.LOG_DIR }}/defconfig.log >> $GITHUB_STEP_SUMMARY
+              tail -50 ../${{ env.LOG_DIR }}/defconfig.log >> $GITHUB_STEP_SUMMARY
               exit 1
           fi
           
           # 对比defconfig前后的luci软件包变化
-          echo "" >> ${{ env.LOG_DIR }}/defconfig.log
-          echo "=== defconfig前后luci软件包对比 ===" >> ${{ env.LOG_DIR }}/defconfig.log
+          echo "" >> ../${{ env.LOG_DIR }}/defconfig.log
+          echo "=== defconfig前后luci软件包对比 ===" >> ../${{ env.LOG_DIR }}/defconfig.log
           
           # 提取defconfig前的luci软件包
           grep 'CONFIG_PACKAGE_luci-.*=y' .config.pre-defconfig | sort > /tmp/luci_pre.txt
@@ -401,19 +450,19 @@ jobs:
           grep 'CONFIG_PACKAGE_luci-.*=y' .config | sort > /tmp/luci_post.txt
           
           # 找出新增的软件包
-          echo "" >> ${{ env.LOG_DIR }}/defconfig.log
-          echo "新增的luci软件包：" >> ${{ env.LOG_DIR }}/defconfig.log
+          echo "" >> ../${{ env.LOG_DIR }}/defconfig.log
+          echo "新增的luci软件包：" >> ../${{ env.LOG_DIR }}/defconfig.log
           comm -13 /tmp/luci_pre.txt /tmp/luci_post.txt | while read line; do
               pkg=$(echo $line | sed 's/CONFIG_PACKAGE_\(.*\)=y/\1/')
-              echo "+ $pkg" >> ${{ env.LOG_DIR }}/defconfig.log
+              echo "+ $pkg" >> ../${{ env.LOG_DIR }}/defconfig.log
           done
           
           # 找出删除的软件包
-          echo "" >> ${{ env.LOG_DIR }}/defconfig.log
-          echo "删除的luci软件包：" >> ${{ env.LOG_DIR }}/defconfig.log
+          echo "" >> ../${{ env.LOG_DIR }}/defconfig.log
+          echo "删除的luci软件包：" >> ../${{ env.LOG_DIR }}/defconfig.log
           comm -23 /tmp/luci_pre.txt /tmp/luci_post.txt | while read line; do
               pkg=$(echo $line | sed 's/CONFIG_PACKAGE_\(.*\)=y/\1/')
-              echo "- $pkg" >> ${{ env.LOG_DIR }}/defconfig.log
+              echo "- $pkg" >> ../${{ env.LOG_DIR }}/defconfig.log
           done
           
           # 在GitHub摘要中显示变化
@@ -460,8 +509,8 @@ jobs:
           echo "## 📥 下载源码" >> $GITHUB_STEP_SUMMARY
           
           # 下载所有需要的源码
-          echo "⬇️ 执行 make download..." | tee -a ${{ env.LOG_DIR }}/download.log
-          make download -j$(nproc) 2>&1 | tee -a ${{ env.LOG_DIR }}/download.log
+          echo "⬇️ 执行 make download..." | tee -a ../${{ env.LOG_DIR }}/download.log
+          make download -j$(nproc) 2>&1 | tee -a ../${{ env.LOG_DIR }}/download.log
           
           # 检查下载结果
           if [ ${PIPESTATUS[0]} -eq 0 ]; then
@@ -475,7 +524,7 @@ jobs:
           else
               echo "❌ 源码下载失败！" >> $GITHUB_STEP_SUMMARY
               echo "### 错误详情（最后100行）" >> $GITHUB_STEP_SUMMARY
-              tail -100 ${{ env.LOG_DIR }}/download.log >> $GITHUB_STEP_SUMMARY
+              tail -100 ../${{ env.LOG_DIR }}/download.log >> $GITHUB_STEP_SUMMARY
               exit 1
           fi
 
@@ -490,38 +539,38 @@ jobs:
           echo "## 🏗️ 编译工具链和基础组件" >> $GITHUB_STEP_SUMMARY
           
           # 编译工具
-          echo "🔨 编译 tools..." | tee -a ${{ env.LOG_DIR }}/compile_tools.log
-          make tools/compile -j$(nproc) 2>&1 | tee -a ${{ env.LOG_DIR }}/compile_tools.log
+          echo "🔨 编译 tools..." | tee -a ../${{ env.LOG_DIR }}/compile_tools.log
+          make tools/compile -j$(nproc) 2>&1 | tee -a ../${{ env.LOG_DIR }}/compile_tools.log
           
           if [ ${PIPESTATUS[0]} -eq 0 ]; then
               echo "✓ tools编译成功" >> $GITHUB_STEP_SUMMARY
           else
               echo "❌ tools编译失败！" >> $GITHUB_STEP_SUMMARY
-              tail -100 ${{ env.LOG_DIR }}/compile_tools.log >> $GITHUB_STEP_SUMMARY
+              tail -100 ../${{ env.LOG_DIR }}/compile_tools.log >> $GITHUB_STEP_SUMMARY
               exit 1
           fi
           
           # 编译工具链
-          echo "🔗 编译 toolchain..." | tee -a ${{ env.LOG_DIR }}/compile_toolchain.log
-          make toolchain/compile -j$(nproc) 2>&1 | tee -a ${{ env.LOG_DIR }}/compile_toolchain.log
+          echo "🔗 编译 toolchain..." | tee -a ../${{ env.LOG_DIR }}/compile_toolchain.log
+          make toolchain/compile -j$(nproc) 2>&1 | tee -a ../${{ env.LOG_DIR }}/compile_toolchain.log
           
           if [ ${PIPESTATUS[0]} -eq 0 ]; then
               echo "✓ toolchain编译成功" >> $GITHUB_STEP_SUMMARY
           else
               echo "❌ toolchain编译失败！" >> $GITHUB_STEP_SUMMARY
-              tail -100 ${{ env.LOG_DIR }}/compile_toolchain.log >> $GITHUB_STEP_SUMMARY
+              tail -100 ../${{ env.LOG_DIR }}/compile_toolchain.log >> $GITHUB_STEP_SUMMARY
               exit 1
           fi
           
           # 编译基础包
-          echo "📦 编译基础包..." | tee -a ${{ env.LOG_DIR }}/compile_base.log
-          make package/compile -j$(nproc) 2>&1 | tee -a ${{ env.LOG_DIR }}/compile_base.log
+          echo "📦 编译基础包..." | tee -a ../${{ env.LOG_DIR }}/compile_base.log
+          make package/compile -j$(nproc) 2>&1 | tee -a ../${{ env.LOG_DIR }}/compile_base.log
           
           if [ ${PIPESTATUS[0]} -eq 0 ]; then
               echo "✓ 基础包编译成功" >> $GITHUB_STEP_SUMMARY
           else
               echo "❌ 基础包编译失败！" >> $GITHUB_STEP_SUMMARY
-              tail -100 ${{ env.LOG_DIR }}/compile_base.log >> $GITHUB_STEP_SUMMARY
+              tail -100 ../${{ env.LOG_DIR }}/compile_base.log >> $GITHUB_STEP_SUMMARY
               exit 1
           fi
           
@@ -570,6 +619,14 @@ jobs:
           echo "### 📦 缓存状态" >> $GITHUB_STEP_SUMMARY
           echo "- DL缓存命中: ${{ steps.cache-dl.outputs.cache-hit }}" >> $GITHUB_STEP_SUMMARY
           echo "- 基础环境缓存命中: ${{ steps.cache-base.outputs.cache-hit }}" >> $GITHUB_STEP_SUMMARY
+          
+          # 如果缓存未命中，说明这是首次编译
+          if [ "${{ steps.cache-base.outputs.cache-hit }}" != "true" ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "### 📝 首次编译说明" >> $GITHUB_STEP_SUMMARY
+              echo "这是首次编译，缓存将在完成后保存。" >> $GITHUB_STEP_SUMMARY
+              echo "下次编译将使用缓存，速度会大幅提升。" >> $GITHUB_STEP_SUMMARY
+          fi
 
   # 第二阶段：并行编译不同配置的固件
   build-firmware:
@@ -623,6 +680,9 @@ jobs:
           
           # 创建配置日志
           CONFIG_LOG="../${{ env.LOG_DIR }}/config_${{ matrix.config }}.log"
+          mkdir -p ../${{ env.LOG_DIR }}
+          touch $CONFIG_LOG
+          
           echo "=== ${{ matrix.config }} 配置应用过程 ===" > $CONFIG_LOG
           echo "时间: $(date)" >> $CONFIG_LOG
           echo "" >> $CONFIG_LOG
