@@ -98,7 +98,8 @@ jobs:
           source $GITHUB_WORKSPACE/scripts/common.sh
           step_start "提取设备名"
           # 从芯片基础配置文件中提取所有设备名，路径为仓库根目录下的 configs 文件夹
-          local devices=$(extract_device_names "$GITHUB_WORKSPACE/configs/base_${{ env.CHIPSET }}.config")
+          # 【修正】移除了错误的 `local` 关键字
+          devices=$(extract_device_names "$GITHUB_WORKSPACE/configs/base_${{ env.CHIPSET }}.config")
           # 将设备名列表设置为输出，供其他job使用
           echo "devices=$devices" >> $GITHUB_OUTPUT
           step_end "提取设备名"
@@ -108,8 +109,8 @@ jobs:
         run: |
           source $GITHUB_WORKSPACE/scripts/common.sh
           step_start "生成缓存哈希文件"
-          # 生成一个基于脚本和配置文件的哈希文件名，用于缓存key
-          local hash_file="hashes-${{ env.CHIPSET }}.txt"
+          # 【修正】移除了错误的 `local` 关键字
+          hash_file="hashes-${{ env.CHIPSET }}.txt"
           generate_hashes_file "$hash_file" \
             "$GITHUB_WORKSPACE/scripts/" \
             "$GITHUB_WORKSPACE/configs/base_${{ env.CHIPSET }}.config"
