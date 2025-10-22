@@ -1,0 +1,161 @@
+name: Multi-Config OpenWrt Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: '选择要编译的分支'
+        required: true
+        default: 'immwrt'
+        type: choice
+        options:
+          - immwrt
+          # - openwrt  # 未来可轻松添加
+          # - libwrt   # 未来可轻松添加
+      config:
+        description: '选择要编译的配置'
+        required: true
+        default: 'Pro'
+        type: choice
+        options:
+          - Pro
+          - Max
+          - Ultra
+          - All # 新增一个“全部编译”的选项
+
+env:
+  REPO_URL: https://github.com/openwrt/openwrt.git # 默认值，会被矩阵覆盖
+  REPO_BRANCH: master
+  FEEDS_CONF: feeds.conf.default
+  CONFIG_FILE: .config
+  DIY_P1_SH: .github/scripts/diy.sh
+  DIY_P2_SH: .github/scripts/repo.sh
+  UPLOAD_BIN_DIR: false
+  UPLOAD_FIRMWARE: true
+  UPLOAD_COWTRANSFER: false
+  UPLOAD_WETRANSFER: false
+  UPLOAD_RELEASE: false
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    
+    # 核心策略：动态矩阵
+    strategy:
+      fail-fast: false # 一个配置失败，其他配置继续编译
+      matrix:
+        # 根据用户输入决定矩阵内容
+        include:
+          # 如果用户选择 'All'，则展开所有配置
+          - ${{ if github.event.inputs.config == 'All' }}
+            config: Pro
+          - ${{ if github.event.inputs.config == 'All' }}
+            config: Max
+          - ${{ if github.event.inputs.config == 'All' }}
+            config: Ultra
+          # 如果用户选择特定配置，则只编译该配置
+          - ${{ if github.event.inputs.config != 'All' }}
+            config: ${{ github.event.inputs.config }}
+
+        # 将分支信息映射到矩阵变量，这是扩展性的关键
+        include:
+          - branch: 'immwrt'
+            REPO_URL: 'https://github.com/laipeng668/immortalwrt.git'
+            REPO_BRANCH: 'master'
+            REPO_SHORT: 'immwrt'
+          # - branch: 'openwrt' # 未来只需在这里添加新分支映射
+          #   REPO_URL: 'https://github.com/laipeng668/openwrt.git'
+          #   REPO_BRANCH: 'master'
+          #   REPO_SHORT: 'openwrt'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialization Environment
+        run: |
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2204)
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+
+      # 核心：分层缓存 - 第一层 (基础环境)
+      - name: Cache Base Environment
+        id: cache-base
+        uses: actions/cache@v4
+        with:
+          path: |
+            openwrt/toolchain
+            openwrt/dl
+          key: ${{ runner.os }}-base-${{ matrix.REPO_SHORT }}-${{ hashFiles('**/base_ipq60xx.config', '**/base_immwrt.config') }}
+          restore-keys: |
+            ${{ runner.os }}-base-${{ matrix.REPO_SHORT }}-
+
+      - name: Clone Source Code
+        run: |
+          df -hT $PWD
+          git clone ${{ matrix.REPO_URL }} -b ${{ matrix.REPO_BRANCH }} openwrt
+          cd openwrt
+          git log -1 --pretty=format:"%h %s"
+
+      - name: Load Custom Feeds & Scripts
+        run: |
+          [ -e $DIY_P1_SH ] && chmod +x $DIY_P1_SH && cd openwrt && $GITHUB_WORKSPACE/$DIY_P1_SH
+          [ -e $DIY_P2_SH ] && chmod +x $DIY_P2_SH && cd openwrt && $GITHUB_WORKSPACE/$DIY_P2_SH
+
+      - name: Generate Configuration File
+        run: |
+          cd openwrt
+          echo "Generating .config for ${{ matrix.config }} on ${{ matrix.REPO_SHORT }}"
+          # 1. 合并配置文件
+          cat $GITHUB_WORKSPACE/.github/configs/base_ipq60xx.config >> .config
+          cat $GITHUB_WORKSPACE/.github/configs/base_${{ matrix.REPO_SHORT }}.config >> .config
+          cat $GITHUB_WORKSPACE/.github/configs/${{ matrix.config }}.config >> .config
+          
+          # 2. 【关键】使用 defconfig 处理依赖，确保 Luci 包能被正确识别和配置
+          make defconfig
+          
+          # 3. (可选) 打印最终配置用于调试
+          cat .config
+
+      - name: Download Packages
+        id: download
+        run: |
+          cd openwrt
+          make defconfig
+          make download -j8
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: Compile Firmware
+        id: compile
+        run: |
+          cd openwrt
+          echo -e "$(nproc) thread compile"
+          make -j$(nproc) || make -j1 || make -j1 V=s
+          echo "status=success" >> $GITHUB_OUTPUT
+          grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+          [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+          echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+      - name: Upload Firmware Directory
+        uses: actions/upload-artifact@v4
+        if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+        with:
+          name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+          path: openwrt/bin/
+
+      - name: Upload Firmware
+        uses: actions/upload-artifact@v4
+        if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
+        with:
+          name: ${{ matrix.REPO_SHORT }}_${{ matrix.config }}_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+          path: |
+            openwrt/bin/targets/*/*
+            !openwrt/bin/targets/*/*.manifest
+            !openwrt/bin/targets/*/*.json
