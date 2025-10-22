@@ -1,62 +1,33 @@
 #!/bin/bash
-# ==============================================================================
-# 日志模块
-# 功能: 提供格式化、带颜色和图标的日志输出函数。
-# ==============================================================================
+# ====================================================
+# Description: Customization for LibWrt
+# License: MIT
+# Author: Mary
+# ====================================================
 
-# --- 颜色定义 ---
-export RED='\033[0;31m'
-export GREEN='\033[0;32m'
-export YELLOW='\033[1;33m'
-export BLUE='\033[0;34m'
-export PURPLE='\033[0;35m'
-export CYAN='\033[0;36m'
-export WHITE='\033[1;37m'
-export NC='\033[0m' # No Color
+# --- Part 1: DIY (修改源码) ---
+log_info ">>> 开始应用 LibWrt DIY 自定义..."
 
-# --- 图标定义 ---
-export ICON_SUCCESS="✅"
-export ICON_ERROR="❌"
-export ICON_WARN="⚠️"
-export ICON_INFO="ℹ️"
-export ICON_START="🚀"
-export ICON_END="🏁"
-export ICON_PACKAGE="📦"
-export ICON_DEBUG="🐞"
+# 1. 修改默认IP、主机名、密码
+sed -i 's/192.168.1.1/192.168.111.1/g' package/base-files/files/bin/config_generate
+sed -i 's/OpenWrt/WRT/g' package/base-files/files/bin/config_generate
+# 设置默认密码为空 (root:$1$empty$...)
+sed -i 's/root::0:0:99999:7:::/root:$1$empty$6PzN4uVzq8bZ2z2x2z2x2:0:0:99999:7:::/g' package/base-files/files/etc/shadow
 
-# --- 日志函数 ---
-log_info() {
-    echo -e "${CYAN}${ICON_INFO} [INFO]${NC} $1" | tee -a "${FULL_LOG_PATH:-/dev/null}"
-}
+log_success ">>> LibWrt DIY 自定义完成。"
 
-log_warn() {
-    echo -e "${YELLOW}${ICON_WARN} [WARN]${NC} $1" | tee -a "${FULL_LOG_PATH:-/dev/null}"
-}
+# --- Part 2: Repo (管理软件源) ---
+log_info ">>> 开始添加 LibWrt 第三方软件源..."
 
-log_error() {
-    echo -e "${RED}${ICON_ERROR} [ERROR]${NC} $1" | tee -a "${FULL_LOG_PATH:-/dev/null}"
-}
+# 添加 kenzok8/small-package 软件源
+FEEDS_CONF="feeds.conf.default"
+CUSTOM_FEED_URL="https://github.com/kenzok8/small-package"
 
-log_success() {
-    echo -e "${GREEN}${ICON_SUCCESS} [SUCCESS]${NC} $1" | tee -a "${FULL_LOG_PATH:-/dev/null}"
-}
+if ! grep -q "$CUSTOM_FEED_URL" "$FEEDS_CONF"; then
+    echo "src-git small_package $CUSTOM_FEED_URL" >> "$FEEDS_CONF"
+    log_success ">>> 成功添加自定义软件源: ${CUSTOM_FEED_URL}"
+else
+    log_info ">>> 自定义软件源已存在，跳过添加。"
+fi
 
-log_debug() {
-    # 仅在 DEBUG 模式下输出
-    if [[ "${DEBUG:-false}" == "true" ]]; then
-        echo -e "${PURPLE}${ICON_DEBUG} [DEBUG]${NC} $1" | tee -a "${FULL_LOG_PATH:-/dev/null}"
-    fi
-}
-
-# --- 步骤标记函数 ---
-step_start() {
-    echo -e "\n------------------------------------------------------------------" | tee -a "${FULL_LOG_PATH:-/dev/null}"
-    echo -e "${BLUE}${ICON_START} [STEP START]${NC} $1" | tee -a "${FULL_LOG_PATH:-/dev/null}"
-    echo -e "------------------------------------------------------------------\n" | tee -a "${FULL_LOG_PATH:-/dev/null}"
-}
-
-step_end() {
-    echo -e "\n------------------------------------------------------------------" | tee -a "${FULL_LOG_PATH:-/dev/null}"
-    echo -e "${GREEN}${ICON_END} [STEP END]${NC} $1" | tee -a "${FULL_LOG_PATH:-/dev/null}"
-    echo -e "------------------------------------------------------------------\n" | tee -a "${FULL_LOG_PATH:-/dev/null}"
-}
+log_success ">>> LibWrt 软件源配置完成。"
