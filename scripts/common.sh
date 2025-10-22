@@ -141,11 +141,13 @@ compare_luci_packages() {
 
 # --- 设备名提取 ---
 # $1: 芯片基础配置文件路径
+# 【修正】重写了此函数，使用更精确的正则表达式，并移除了内部日志输出
 extract_device_names() {
     local base_config_file=$1
-    log_info "从 ${base_config_file} 中提取设备名..."
-    local devices=$(grep -oE '_DEVICE_[^=]+=y' "$base_config_file" | sed -E 's/_DEVICE_([^=]+)=y/\1/' | tr '\n' ' ')
-    log_success "提取到的设备列表: ${devices}"
+    # 使用更精确的正则表达式，匹配 `CONFIG_TARGET_DEVICE_..._DEVICE_...=y` 格式的行
+    # 然后用 sed 提取 `_DEVICE_` 和 `=y` 之间的设备名
+    local devices=$(grep -oE 'CONFIG_TARGET_DEVICE_.*_DEVICE_([^=]+)=y' "$base_config_file" | sed -E 's/.*_DEVICE_([^=]+)=y/\1/' | tr '\n' ' ')
+    # 函数只返回纯净的字符串，不打印任何日志
     echo "$devices"
 }
 
