@@ -36,7 +36,7 @@ env:
   AUTHOR: "Mary"
 
 jobs:
-  # Job 1: 准备基础编译环境
+  # Job 1: 准备基础编译环境 (串行处理所有分支)
   prepare-env:
     name: 准备编译环境
     runs-on: ${{ github.event.inputs.ubuntu_version || 'ubuntu-22.04' }}
@@ -117,53 +117,51 @@ jobs:
           restore-keys: |
             ${{ env.CHIPSET }}-ccache-
 
-      - name: 准备分支环境 (矩阵)
-        strategy:
-          fail-fast: false
-          matrix:
-            include:
-              - branch: immwrt
-                repo_url: https://github.com/laipeng668/immortalwrt.git
-                repo_branch: master
-                repo_short: immwrt
-              - branch: openwrt
-                repo_url: https://github.com/laipeng668/openwrt.git
-                repo_branch: master
-                repo_short: openwrt
-              - branch: libwrt
-                repo_url: https://github.com/laipeng668/openwrt-6.x.git
-                repo_branch: k6.12-nss
-                repo_short: libwrt
-
+      - name: 准备所有分支环境 (串行)
         run: |
           source .github/scripts/common.sh
-          step_start "准备 ${{ matrix.branch }} 分支环境"
+          step_start "准备所有分支环境 (串行)"
           
-          # 克隆源码
-          log_info "克隆 ${{ matrix.repo_url }}..."
-          git clone ${{ matrix.repo_url }} -b ${{ matrix.repo_branch }} --single-branch /workdir/${{ matrix.branch }}
+          # 定义分支信息数组
+          declare -A branches=(
+            ["immwrt"]="https://github.com/laipeng668/immortalwrt.git master immwrt"
+            ["openwrt"]="https://github.com/laipeng668/openwrt.git master openwrt"
+            ["libwrt"]="https://github.com/laipeng668/openwrt-6.x.git k6.12-nss libwrt"
+          )
           
-          # 执行自定义脚本
-          log_info "执行 ${{ matrix.branch }} 的自定义脚本..."
-          cd /workdir/${{ matrix.branch }}
-          $GITHUB_WORKSPACE/.github/scripts/custom_${{ matrix.branch }}.sh
+          for branch_key in "${!branches[@]}"; do
+            IFS=' ' read -r repo_url repo_branch repo_short <<< "${branches[$branch_key]}"
+            log_info "开始处理分支: ${repo_short}"
+            
+            # 克隆源码
+            log_info "克隆 ${repo_url}..."
+            git clone "${repo_url}" -b "${repo_branch}" --single-branch "/workdir/${repo_short}"
+            
+            # 执行自定义脚本
+            log_info "执行 ${repo_short} 的自定义脚本..."
+            cd "/workdir/${repo_short}"
+            "${GITHUB_WORKSPACE}/.github/scripts/custom_${repo_short}.sh"
+            
+            # 更新和安装 Feeds
+            log_info "更新和安装 Feeds..."
+            ./scripts/feeds update -a
+            ./scripts/feeds install -a
+            
+            # 合并基础配置
+            log_info "合并基础配置文件..."
+            cat "${GITHUB_WORKSPACE}/.github/configs/base_${{ env.CHIPSET }}.config" > .config
+            cat "${GITHUB_WORKSPACE}/.github/configs/base_${repo_short}.config" >> .config
+            make defconfig
+            
+            # 下载源码
+            log_info "下载所有软件包源码..."
+            make download -j$(nproc)
+            
+            log_success "分支 ${repo_short} 环境准备完成。"
+            cd /workdir
+          done
           
-          # 更新和安装 Feeds
-          log_info "更新和安装 Feeds..."
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-          
-          # 合并基础配置
-          log_info "合并基础配置文件..."
-          cat $GITHUB_WORKSPACE/.github/configs/base_${{ env.CHIPSET }}.config > .config
-          cat $GITHUB_WORKSPACE/.github/configs/base_${{ matrix.branch }}.config >> .config
-          make defconfig
-          
-          # 下载源码
-          log_info "下载所有软件包源码..."
-          make download -j$(nproc)
-          
-          step_end "准备 ${{ matrix.branch }} 分支环境"
+          step_end "准备所有分支环境 (串行)"
 
       - name: 上传环境 Artifact
         uses: actions/upload-artifact@v4
