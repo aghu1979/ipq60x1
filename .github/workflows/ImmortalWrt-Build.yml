@@ -23,6 +23,7 @@ on:
 
 # 全局环境变量
 env:
+  # 当前分支配置 - 仅支持immwrt分支
   REPO_URL: https://github.com/laipeng668/immortalwrt.git
   REPO_BRANCH: master
   REPO_SHORT: immwrt
@@ -40,29 +41,30 @@ env:
   DEFAULT_IP: 192.168.111.1
   DEFAULT_PASSWORD: none
   DEFAULT_WIFI_PASSWORD: 12345678
+  # 日志目录
+  LOG_DIR: build_logs
+  # 缓存目录
+  CACHE_DIR: build_cache
 
 jobs:
-  # 第一阶段：环境准备和基础环境编译
+  # 第一阶段：环境准备和基础环境编译（仅immwrt分支）
   setup-and-base-build:
-    name: 🚀 环境准备与基础编译
+    name: 🚀 环境准备与基础编译 (immwrt)
     runs-on: ubuntu-${{ github.event.inputs.ubuntu_version || '22.04' }}
     outputs:
-      cache-key: ${{ steps.cache-key.outputs.key }}
+      cache-key-base: ${{ steps.cache-key-base.outputs.key }}
+      cache-key-dl: ${{ steps.cache-key-dl.outputs.key }}
       device-list: ${{ steps.parse-devices.outputs.devices }}
       kernel-version: ${{ steps.get-kernel.outputs.version }}
       build-date: ${{ steps.get-date.outputs.date }}
-      cache-hit: ${{ steps.cache-base.outputs.cache-hit }}
+      cache-hit-base: ${{ steps.cache-base.outputs.cache-hit }}
+      cache-hit-dl: ${{ steps.cache-dl.outputs.cache-hit }}
+      base-config-hash: ${{ steps.base-config.outputs.hash }}
       
     steps:
-      - name: 🧹 清理磁盘空间
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          swap-storage: true
+      # 注释掉第一个磁盘清理，按用户要求临时暂停
+      # - name: 🧹 清理磁盘空间
+      #   uses: jlumbroso/free-disk-space@main
 
       - name: 📥 检出代码
         uses: actions/checkout@v4
@@ -70,102 +72,504 @@ jobs:
           fetch-depth: 0
 
       - name: 📊 显示初始磁盘空间
+        id: disk-space-init
         run: |
           echo "## 📊 初始磁盘空间" >> $GITHUB_STEP_SUMMARY
           df -h | tee -a $GITHUB_STEP_SUMMARY
+          
+          # 创建日志目录
+          mkdir -p ${{ env.LOG_DIR }}
+          echo "✓ 创建日志目录: ${{ env.LOG_DIR }}" >> $GITHUB_STEP_SUMMARY
 
       - name: 🐧 安装依赖
+        id: install-deps
+        continue-on-error: false
         run: |
-          sudo apt-get update
+          set -e  # 严格错误退出
+          
+          echo "## 🐧 开始安装系统依赖" >> $GITHUB_STEP_SUMMARY
+          
+          # 更新软件包列表
+          sudo apt-get update -qq
+          
+          # 安装编译依赖
           sudo apt-get install -y \
             build-essential clang flex bison g++ gawk \
             gcc-multilib g++-multilib gettext git libncurses5-dev \
             libssl-dev python3-distutils python3-pyelftools \
             python3-setuptools python3-serial rsync unzip \
             zlib1g-dev file wget ccache curl device-tree-compiler \
-            python3-pip python3-wheel qemu-utils
+            python3-pip python3-wheel qemu-utils \
+            subversion build-essential libncurses5-dev zlib1g-dev \
+            gawk git gettext libssl-dev xsltproc zip unzip \
+            python3-pyelftools libxml-parser-perl libfuse-dev \
+            libjson-c-dev liblzma-dev libzstd-dev
+            
+          # 升级pip
           sudo pip3 install --upgrade pip
           sudo pip3 install pyelftools
+          
+          echo "✓ 系统依赖安装完成" >> $GITHUB_STEP_SUMMARY
+          
+          # 验证关键工具
+          for tool in gcc g++ make git python3 ccache; do
+            if command -v $tool >/dev/null 2>&1; then
+              echo "✓ $tool: $(which $tool)" >> $GITHUB_STEP_SUMMARY
+            else
+                  echo "❌ $tool 未找到！" >> $GITHUB_STEP_SUMMARY
+                  exit 1
+              fi
+          done
 
-      - name: 📅 获取构建日期
+      - name: 📅 获取构建信息
         id: get-date
         run: |
-          echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
-          echo "## 📅 构建日期: $(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_STEP_SUMMARY
+          # 获取构建日期
+          BUILD_DATE=$(date +'%Y%m%d')
+          BUILD_TIME=$(date +'%Y-%m-%d %H:%M:%S')
+          
+          echo "date=${BUILD_DATE}" >> $GITHUB_OUTPUT
+          echo "time=${BUILD_TIME}" >> $GITHUB_OUTPUT
+          
+          echo "## 📅 构建信息" >> $GITHUB_STEP_SUMMARY
+          echo "- 构建日期: ${BUILD_TIME}" >> $GITHUB_STEP_SUMMARY
+          echo "- 时区: ${{ env.TZ }}" >> $GITHUB_STEP_SUMMARY
 
       - name: 🔑 生成缓存键
-        id: cache-key
+        id: cache-key-base
         run: |
-          # 生成包含所有相关输入的哈希值
-          HASH_CONTENT="${{ env.REPO_URL }}-${{ env.REPO_BRANCH }}-$(cat .github/configs/base_ipq60xx.config .github/configs/base_immwrt.config | sha256sum | cut -d' ' -f1)"
-          CACHE_KEY="base-${HASH_CONTENT:0:16}"
-          echo "key=${CACHE_KEY}" >> $GITHUB_OUTPUT
-          echo "## 🔑 缓存键: ${CACHE_KEY}" >> $GITHUB_STEP_SUMMARY
+          # 生成基础环境缓存键
+          echo "## 🔑 生成缓存键" >> $GITHUB_STEP_SUMMARY
+          
+          # 基础配置哈希
+          BASE_CONFIG_HASH=$(cat .github/configs/base_ipq60xx.config .github/configs/base_immwrt.config | sha256sum | cut -d' ' -f1)
+          echo "base-config-hash=${BASE_CONFIG_HASH}" >> $GITHUB_OUTPUT
+          
+          # 基础环境缓存键（包含工具链、staging等）
+          BASE_CACHE_KEY="immwrt-base-${BASE_CONFIG_HASH:0:16}"
+          echo "key=${BASE_CACHE_KEY}" >> $GITHUB_OUTPUT
+          
+          # DL缓存键（下载文件）
+          DL_CACHE_KEY="immwrt-dl-${BASE_CONFIG_HASH:0:16}"
+          echo "dl-key=${DL_CACHE_KEY}" >> $GITHUB_OUTPUT
+          
+          echo "- 基础环境缓存键: ${BASE_CACHE_KEY}" >> $GITHUB_STEP_SUMMARY
+          echo "- DL缓存键: ${DL_CACHE_KEY}" >> $GITHUB_STEP_SUMMARY
 
-      - name: 📦 检出基础环境缓存
+      - name: 📦 检出DL缓存（下载文件）
+        id: cache-dl
+        uses: actions/cache@v4
+        with:
+          path: openwrt/dl
+          key: ${{ steps.cache-key-base.outputs.dl-key }}
+          restore-keys: |
+            immwrt-dl-
+
+      - name: 📦 检出基础环境缓存（工具链、staging等）
         id: cache-base
         uses: actions/cache@v4
         with:
           path: |
-            openwrt/
+            openwrt/staging_dir/
+            openwrt/build_dir/
+            openwrt/tmp/
             !openwrt/bin/
             !openwrt/logs/
-            !openwrt/tmp/
-          key: ${{ steps.cache-key.outputs.key }}
+          key: ${{ steps.cache-key-base.outputs.key }}
           restore-keys: |
-            base-
+            immwrt-base-
 
       - name: 📥 克隆源码（缓存未命中时）
         if: steps.cache-base.outputs.cache-hit != 'true'
+        id: clone-source
         run: |
-          echo "## 📥 缓存未命中，开始克隆源码" >> $GITHUB_STEP_SUMMARY
-          git clone ${{ env.REPO_URL }} -b ${{ env.REPO_BRANCH }} openwrt
+          set -e  # 严格错误退出
+          
+          echo "## 📥 缓存未命中，开始准备基础环境" >> $GITHUB_STEP_SUMMARY
+          
+          # 克隆源码
+          echo "📥 克隆 immwrt 源码..." | tee -a ${{ env.LOG_DIR }}/clone.log
+          git clone ${{ env.REPO_URL }} -b ${{ env.REPO_BRANCH }} openwrt 2>&1 | tee -a ${{ env.LOG_DIR }}/clone.log
           cd openwrt
           
-          # 应用基础配置
-          echo "## 🔧 应用芯片基础配置" >> $GITHUB_STEP_SUMMARY
-          cat ../.github/configs/base_ipq60xx.config >> .config
+          # 验证克隆
+          if [ ! -f "Makefile" ]; then
+              echo "❌ 源码克隆失败！" | tee -a ${{ env.LOG_DIR }}/clone.log
+              exit 1
+          fi
+          echo "✓ 源码克隆成功" >> $GITHUB_STEP_SUMMARY
+
+      - name: 🔧 合并基础配置文件
+        id: base-config
+        if: steps.cache-base.outputs.cache-hit != 'true'
+        run: |
+          set -e  # 严格错误退出
           
-          echo "## 🔧 应用分支基础配置" >> $GITHUB_STEP_SUMMARY
-          cat ../.github/configs/base_immwrt.config >> .config
+          cd openwrt
+          
+          echo "## 🔧 合并基础配置文件" >> $GITHUB_STEP_SUMMARY
+          
+          # 创建配置合并日志
+          CONFIG_LOG="${{ env.LOG_DIR }}/config_merge.log"
+          echo "=== 基础配置合并过程 ===" > $CONFIG_LOG
+          echo "时间: $(date)" >> $CONFIG_LOG
+          echo "" >> $CONFIG_LOG
+          
+          # 1. 应用芯片基础配置
+          echo "📋 应用芯片基础配置 (base_ipq60xx.config)" | tee -a $CONFIG_LOG
+          if [ -f "../.github/configs/base_ipq60xx.config" ]; then
+              cat ../.github/configs/base_ipq60xx.config >> .config
+              echo "✓ 已应用 base_ipq60xx.config" | tee -a $CONFIG_LOG
+          else
+              echo "❌ 未找到 base_ipq60xx.config" | tee -a $CONFIG_LOG
+              exit 1
+          fi
+          
+          # 2. 应用分支基础配置
+          echo "" >> $CONFIG_LOG
+          echo "📋 应用分支基础配置 (base_immwrt.config)" | tee -a $CONFIG_LOG
+          if [ -f "../.github/configs/base_immwrt.config" ]; then
+              cat ../.github/configs/base_immwrt.config >> .config
+              echo "✓ 已应用 base_immwrt.config" | tee -a $CONFIG_LOG
+          else
+              echo "❌ 未找到 base_immwrt.config" | tee -a $CONFIG_LOG
+              exit 1
+          fi
+          
+          # 3. 生成配置哈希
+          CONFIG_HASH=$(cat .config | sha256sum | cut -d' ' -f1)
+          echo "hash=${CONFIG_HASH}" >> $GITHUB_OUTPUT
+          
+          # 4. 显示合并后的配置摘要
+          echo "" >> $CONFIG_LOG
+          echo "=== 配置合并摘要 ===" >> $CONFIG_LOG
+          echo "总配置行数: $(wc -l < .config)" >> $CONFIG_LOG
+          echo "启用的软件包数: $(grep '=y' .config | wc -l)" >> $CONFIG_LOG
+          echo "启用的luci软件包数: $(grep 'CONFIG_PACKAGE_luci-.*=y' .config | wc -l)" >> $CONFIG_LOG
+          
+          # 在GitHub摘要中显示
+          echo "### 📊 配置合并摘要" >> $GITHUB_STEP_SUMMARY
+          echo "- 总配置行数: $(wc -l < .config)" >> $GITHUB_STEP_SUMMARY
+          echo "- 启用的软件包数: $(grep '=y' .config | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo "- 启用的luci软件包数: $(grep 'CONFIG_PACKAGE_luci-.*=y' .config | wc -l)" >> $GITHUB_STEP_SUMMARY
+          
+          # 上传配置合并日志
+          echo "✓ 基础配置合并完成" >> $GITHUB_STEP_SUMMARY
+
+      - name: 🔍 分析基础配置中的luci软件包
+        id: analyze-luci-base
+        if: steps.cache-base.outputs.cache-hit != 'true'
+        run: |
+          cd openwrt
+          
+          echo "## 🔍 基础配置luci软件包分析" >> $GITHUB_STEP_SUMMARY
+          
+          # 创建luci分析日志
+          LUCI_LOG="${{ env.LOG_DIR }}/luci_analysis.log"
+          echo "=== 基础配置luci软件包分析 ===" > $LUCI_LOG
+          echo "时间: $(date)" >> $LUCI_LOG
+          echo "" >> $LUCI_LOG
+          
+          # 提取所有luci软件包
+          echo "📋 基础配置中的luci软件包列表：" >> $LUCI_LOG
+          grep 'CONFIG_PACKAGE_luci-.*=y' .config | sort >> $LUCI_LOG
+          
+          # 统计信息
+          LUCI_COUNT=$(grep 'CONFIG_PACKAGE_luci-.*=y' .config | wc -l)
+          echo "" >> $LUCI_LOG
+          echo "总计: ${LUCI_COUNT} 个luci软件包" >> $LUCI_LOG
+          
+          # 在GitHub摘要中显示关键信息
+          echo "### 📦 基础配置luci软件包" >> $GITHUB_STEP_SUMMARY
+          echo "- 总数: ${LUCI_COUNT} 个" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**主要luci软件包：**" >> $GITHUB_STEP_SUMMARY
+          
+          # 显示前20个重要的luci软件包
+          grep 'CONFIG_PACKAGE_luci-.*=y' .config | head -20 | while read line; do
+              pkg=$(echo $line | sed 's/CONFIG_PACKAGE_\(.*\)=y/\1/')
+              echo "- $pkg" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          if [ $LUCI_COUNT -gt 20 ]; then
+              echo "- ... 还有 $((LUCI_COUNT - 20)) 个软件包" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "✓ luci软件包分析完成" >> $GITHUB_STEP_SUMMARY
+
+      - name: 🛠️ 执行DIY配置
+        id: diy-config
+        if: steps.cache-base.outputs.cache-hit != 'true'
+        run: |
+          set -e  # 严格错误退出
+          
+          cd openwrt
+          
+          echo "## 🛠️ 执行DIY配置" >> $GITHUB_STEP_SUMMARY
+          
+          # 执行diy.sh脚本
+          if [ -f "../${{ env.DIY_P1_SH }}" ]; then
+              echo "🔧 执行 diy.sh..." | tee -a ${{ env.LOG_DIR }}/diy.log
+              chmod +x "../${{ env.DIY_P1_SH }}"
+              "../${{ env.DIY_P1_SH }}" 2>&1 | tee -a ${{ env.LOG_DIR }}/diy.log
+              echo "✓ DIY配置完成" >> $GITHUB_STEP_SUMMARY
+          else
+              echo "⚠️ 未找到 diy.sh，跳过DIY配置" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # 执行repo.sh脚本
+          if [ -f "../${{ env.DIY_P2_SH }}" ]; then
+              echo "🔧 执行 repo.sh..." | tee -a ${{ env.LOG_DIR }}/repo.log
+              chmod +x "../${{ env.DIY_P2_SH }}"
+              "../${{ env.DIY_P2_SH }}" 2>&1 | tee -a ${{ env.LOG_DIR }}/repo.log
+              echo "✓ 第三方源配置完成" >> $GITHUB_STEP_SUMMARY
+          else
+              echo "⚠️ 未找到 repo.sh，跳过第三方源配置" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 🔄 更新和安装Feeds
+        id: update-feeds
+        if: steps.cache-base.outputs.cache-hit != 'true'
+        run: |
+          set -e  # 严格错误退出
+          
+          cd openwrt
+          
+          echo "## 🔄 更新和安装Feeds" >> $GITHUB_STEP_SUMMARY
           
           # 更新feeds
-          echo "## 📦 更新feeds" >> $GITHUB_STEP_SUMMARY
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          echo "📦 更新feeds..." | tee -a ${{ env.LOG_DIR }}/feeds_update.log
+          ./scripts/feeds update -a 2>&1 | tee -a ${{ env.LOG_DIR }}/feeds_update.log
           
-          # 准备基础编译环境
-          echo "## 🏗️ 准备基础编译环境" >> $GITHUB_STEP_SUMMARY
-          make defconfig
-          make download -j8
-          make tools/compile -j$(nproc)
-          make toolchain/compile -j$(nproc)
+          # 检查更新结果
+          if [ ${PIPESTATUS[0]} -eq 0 ]; then
+              echo "✓ Feeds更新成功" >> $GITHUB_STEP_SUMMARY
+          else
+              echo "❌ Feeds更新失败！" >> $GITHUB_STEP_SUMMARY
+              echo "### 错误详情（最后50行）" >> $GITHUB_STEP_SUMMARY
+              tail -50 ${{ env.LOG_DIR }}/feeds_update.log >> $GITHUB_STEP_SUMMARY
+              exit 1
+          fi
+          
+          # 安装feeds
+          echo "📦 安装feeds..." | tee -a ${{ env.LOG_DIR }}/feeds_install.log
+          ./scripts/feeds install -a 2>&1 | tee -a ${{ env.LOG_DIR }}/feeds_install.log
+          
+          # 检查安装结果
+          if [ ${PIPESTATUS[0]} -eq 0 ]; then
+              echo "✓ Feeds安装成功" >> $GITHUB_STEP_SUMMARY
+          else
+              echo "❌ Feeds安装失败！" >> $GITHUB_STEP_SUMMARY
+              echo "### 错误详情（最后50行）" >> $GITHUB_STEP_SUMMARY
+              tail -50 ${{ env.LOG_DIR }}/feeds_install.log >> $GITHUB_STEP_SUMMARY
+              exit 1
+          fi
+
+      - name: ⚙️ 生成最终配置（make defconfig）
+        id: make-defconfig
+        if: steps.cache-base.outputs.cache-hit != 'true'
+        run: |
+          set -e  # 严格错误退出
+          
+          cd openwrt
+          
+          echo "## ⚙️ 生成最终配置" >> $GITHUB_STEP_SUMMARY
+          
+          # 备份defconfig前的配置
+          cp .config .config.pre-defconfig
+          
+          # 执行defconfig
+          echo "🔧 执行 make defconfig..." | tee -a ${{ env.LOG_DIR }}/defconfig.log
+          make defconfig 2>&1 | tee -a ${{ env.LOG_DIR }}/defconfig.log
+          
+          # 检查defconfig结果
+          if [ ${PIPESTATUS[0]} -eq 0 ]; then
+              echo "✓ make defconfig 成功" >> $GITHUB_STEP_SUMMARY
+          else
+              echo "❌ make defconfig 失败！" >> $GITHUB_STEP_SUMMARY
+              tail -50 ${{ env.LOG_DIR }}/defconfig.log >> $GITHUB_STEP_SUMMARY
+              exit 1
+          fi
+          
+          # 对比defconfig前后的luci软件包变化
+          echo "" >> ${{ env.LOG_DIR }}/defconfig.log
+          echo "=== defconfig前后luci软件包对比 ===" >> ${{ env.LOG_DIR }}/defconfig.log
+          
+          # 提取defconfig前的luci软件包
+          grep 'CONFIG_PACKAGE_luci-.*=y' .config.pre-defconfig | sort > /tmp/luci_pre.txt
+          # 提取defconfig后的luci软件包
+          grep 'CONFIG_PACKAGE_luci-.*=y' .config | sort > /tmp/luci_post.txt
+          
+          # 找出新增的软件包
+          echo "" >> ${{ env.LOG_DIR }}/defconfig.log
+          echo "新增的luci软件包：" >> ${{ env.LOG_DIR }}/defconfig.log
+          comm -13 /tmp/luci_pre.txt /tmp/luci_post.txt | while read line; do
+              pkg=$(echo $line | sed 's/CONFIG_PACKAGE_\(.*\)=y/\1/')
+              echo "+ $pkg" >> ${{ env.LOG_DIR }}/defconfig.log
+          done
+          
+          # 找出删除的软件包
+          echo "" >> ${{ env.LOG_DIR }}/defconfig.log
+          echo "删除的luci软件包：" >> ${{ env.LOG_DIR }}/defconfig.log
+          comm -23 /tmp/luci_pre.txt /tmp/luci_post.txt | while read line; do
+              pkg=$(echo $line | sed 's/CONFIG_PACKAGE_\(.*\)=y/\1/')
+              echo "- $pkg" >> ${{ env.LOG_DIR }}/defconfig.log
+          done
+          
+          # 在GitHub摘要中显示变化
+          echo "### 📦 defconfig后luci软件包变化" >> $GITHUB_STEP_SUMMARY
+          
+          NEW_COUNT=$(comm -13 /tmp/luci_pre.txt /tmp/luci_post.txt | wc -l)
+          REMOVED_COUNT=$(comm -23 /tmp/luci_pre.txt /tmp/luci_post.txt | wc -l)
+          
+          if [ $NEW_COUNT -gt 0 ]; then
+              echo "#### 🟢 新增的软件包 ($NEW_COUNT 个):" >> $GITHUB_STEP_SUMMARY
+              comm -13 /tmp/luci_pre.txt /tmp/luci_post.txt | head -10 | while read line; do
+                  pkg=$(echo $line | sed 's/CONFIG_PACKAGE_\(.*\)=y/\1/')
+                  echo "- $pkg" >> $GITHUB_STEP_SUMMARY
+              done
+              if [ $NEW_COUNT -gt 10 ]; then
+                  echo "- ... 还有 $((NEW_COUNT - 10)) 个" >> $GITHUB_STEP_SUMMARY
+              fi
+          fi
+          
+          if [ $REMOVED_COUNT -gt 0 ]; then
+              echo "#### 🔴 删除的软件包 ($REMOVED_COUNT 个):" >> $GITHUB_STEP_SUMMARY
+              comm -23 /tmp/luci_pre.txt /tmp/luci_post.txt | head -10 | while read line; do
+                  pkg=$(echo $line | sed 's/CONFIG_PACKAGE_\(.*\)=y/\1/')
+                  echo "- $pkg" >> $GITHUB_STEP_SUMMARY
+              done
+              if [ $REMOVED_COUNT -gt 10 ]; then
+                  echo "- ... 还有 $((REMOVED_COUNT - 10)) 个" >> $GITHUB_STEP_SUMMARY
+              fi
+          fi
+          
+          # 最终统计
+          FINAL_LUCI_COUNT=$(grep 'CONFIG_PACKAGE_luci-.*=y' .config | wc -l)
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**最终luci软件包总数: $FINAL_LUCI_COUNT**" >> $GITHUB_STEP_SUMMARY
+
+      - name: 📥 下载源码
+        id: download-sources
+        if: steps.cache-base.outputs.cache-hit != 'true'
+        run: |
+          set -e  # 严格错误退出
+          
+          cd openwrt
+          
+          echo "## 📥 下载源码" >> $GITHUB_STEP_SUMMARY
+          
+          # 下载所有需要的源码
+          echo "⬇️ 执行 make download..." | tee -a ${{ env.LOG_DIR }}/download.log
+          make download -j$(nproc) 2>&1 | tee -a ${{ env.LOG_DIR }}/download.log
+          
+          # 检查下载结果
+          if [ ${PIPESTATUS[0]} -eq 0 ]; then
+              echo "✓ 源码下载成功" >> $GITHUB_STEP_SUMMARY
+              
+              # 显示下载统计
+              DL_COUNT=$(find dl -type f | wc -l)
+              DL_SIZE=$(du -sh dl | cut -f1)
+              echo "- 下载文件数: $DL_COUNT" >> $GITHUB_STEP_SUMMARY
+              echo "- 下载大小: $DL_SIZE" >> $GITHUB_STEP_SUMMARY
+          else
+              echo "❌ 源码下载失败！" >> $GITHUB_STEP_SUMMARY
+              echo "### 错误详情（最后100行）" >> $GITHUB_STEP_SUMMARY
+              tail -100 ${{ env.LOG_DIR }}/download.log >> $GITHUB_STEP_SUMMARY
+              exit 1
+          fi
+
+      - name: 🏗️ 编译工具链和基础组件
+        id: compile-base
+        if: steps.cache-base.outputs.cache-hit != 'true'
+        run: |
+          set -e  # 严格错误退出
+          
+          cd openwrt
+          
+          echo "## 🏗️ 编译工具链和基础组件" >> $GITHUB_STEP_SUMMARY
+          
+          # 编译工具
+          echo "🔨 编译 tools..." | tee -a ${{ env.LOG_DIR }}/compile_tools.log
+          make tools/compile -j$(nproc) 2>&1 | tee -a ${{ env.LOG_DIR }}/compile_tools.log
+          
+          if [ ${PIPESTATUS[0]} -eq 0 ]; then
+              echo "✓ tools编译成功" >> $GITHUB_STEP_SUMMARY
+          else
+              echo "❌ tools编译失败！" >> $GITHUB_STEP_SUMMARY
+              tail -100 ${{ env.LOG_DIR }}/compile_tools.log >> $GITHUB_STEP_SUMMARY
+              exit 1
+          fi
+          
+          # 编译工具链
+          echo "🔗 编译 toolchain..." | tee -a ${{ env.LOG_DIR }}/compile_toolchain.log
+          make toolchain/compile -j$(nproc) 2>&1 | tee -a ${{ env.LOG_DIR }}/compile_toolchain.log
+          
+          if [ ${PIPESTATUS[0]} -eq 0 ]; then
+              echo "✓ toolchain编译成功" >> $GITHUB_STEP_SUMMARY
+          else
+              echo "❌ toolchain编译失败！" >> $GITHUB_STEP_SUMMARY
+              tail -100 ${{ env.LOG_DIR }}/compile_toolchain.log >> $GITHUB_STEP_SUMMARY
+              exit 1
+          fi
+          
+          # 编译基础包
+          echo "📦 编译基础包..." | tee -a ${{ env.LOG_DIR }}/compile_base.log
+          make package/compile -j$(nproc) 2>&1 | tee -a ${{ env.LOG_DIR }}/compile_base.log
+          
+          if [ ${PIPESTATUS[0]} -eq 0 ]; then
+              echo "✓ 基础包编译成功" >> $GITHUB_STEP_SUMMARY
+          else
+              echo "❌ 基础包编译失败！" >> $GITHUB_STEP_SUMMARY
+              tail -100 ${{ env.LOG_DIR }}/compile_base.log >> $GITHUB_STEP_SUMMARY
+              exit 1
+          fi
+          
+          echo "✓ 基础环境编译完成" >> $GITHUB_STEP_SUMMARY
 
       - name: 🔍 解析设备列表
         id: parse-devices
         run: |
           cd openwrt
+          
+          echo "## 🔍 解析设备列表" >> $GITHUB_STEP_SUMMARY
+          
           # 从配置文件中提取设备名称
           DEVICES=$(grep "CONFIG_TARGET_DEVICE.*=y" .config | sed 's/.*DEVICE_\(.*\)=y/\1/' | tr '\n' ' ')
           echo "devices=${DEVICES}" >> $GITHUB_OUTPUT
-          echo "## 📱 检测到的设备: ${DEVICES}" >> $GITHUB_STEP_SUMMARY
+          
+          # 显示设备列表
+          echo "### 📱 支持的设备" >> $GITHUB_STEP_SUMMARY
+          for device in $DEVICES; do
+              echo "- $device" >> $GITHUB_STEP_SUMMARY
+          done
 
       - name: 🐧 获取内核版本
         id: get-kernel
         run: |
           cd openwrt
-          if [ -f include/kernel-version.mk ]; then
-            KERNEL_VERSION=$(grep "KERNEL_VERSION" include/kernel-version.mk | cut -d'=' -f2 | tr -d ' ')
+          
+          # 获取内核版本
+          if [ -f "include/kernel-version.mk" ]; then
+              KERNEL_VERSION=$(grep "KERNEL_VERSION" include/kernel-version.mk | cut -d'=' -f2 | tr -d ' ')
           else
-            KERNEL_VERSION="unknown"
+              KERNEL_VERSION="unknown"
           fi
           echo "version=${KERNEL_VERSION}" >> $GITHUB_OUTPUT
-          echo "## 🐧 内核版本: ${KERNEL_VERSION}" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 🐧 内核版本: ${KERNEL_VERSION}" >> $GITHUB_STEP_SUMMARY
 
       - name: 📊 显示准备后磁盘空间
+        id: disk-space-final
         run: |
-          echo "## 📊 准备后磁盘空间" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 基础环境准备后磁盘空间" >> $GITHUB_STEP_SUMMARY
           df -h | tee -a $GITHUB_STEP_SUMMARY
+          
+          # 显示缓存状态
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 缓存状态" >> $GITHUB_STEP_SUMMARY
+          echo "- DL缓存命中: ${{ steps.cache-dl.outputs.cache-hit }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 基础环境缓存命中: ${{ steps.cache-base.outputs.cache-hit }}" >> $GITHUB_STEP_SUMMARY
 
   # 第二阶段：并行编译不同配置的固件
   build-firmware:
@@ -191,110 +595,254 @@ jobs:
       - name: 📥 检出代码
         uses: actions/checkout@v4
 
+      - name: 📦 恢复DL缓存
+        uses: actions/cache@v4
+        with:
+          path: openwrt/dl
+          key: ${{ needs.setup-and-base-build.outputs.cache-key-dl }}
+
       - name: 📦 恢复基础环境缓存
         uses: actions/cache@v4
         with:
           path: |
-            openwrt/
+            openwrt/staging_dir/
+            openwrt/build_dir/
+            openwrt/tmp/
             !openwrt/bin/
             !openwrt/logs/
-            !openwrt/tmp/
-          key: ${{ needs.setup-and-base-build.outputs.cache-key }}
+          key: ${{ needs.setup-and-base-build.outputs.cache-key-base }}
 
       - name: 🔧 应用用户配置
+        id: apply-user-config
         run: |
+          set -e  # 严格错误退出
+          
           cd openwrt
           
-          # 备份原始配置
+          echo "## 🔧 应用 ${{ matrix.config }} 配置" >> $GITHUB_STEP_SUMMARY
+          
+          # 创建配置日志
+          CONFIG_LOG="../${{ env.LOG_DIR }}/config_${{ matrix.config }}.log"
+          echo "=== ${{ matrix.config }} 配置应用过程 ===" > $CONFIG_LOG
+          echo "时间: $(date)" >> $CONFIG_LOG
+          echo "" >> $CONFIG_LOG
+          
+          # 备份基础配置
           cp .config .config.base
+          echo "✓ 已备份基础配置" | tee -a $CONFIG_LOG
           
           # 应用用户配置
           if [ -f "../.github/configs/${{ matrix.config }}.config" ]; then
-            echo "## 🔧 应用 ${{ matrix.config }} 配置" >> $GITHUB_STEP_SUMMARY
-            cat "../.github/configs/${{ matrix.config }}.config" >> .config
+              echo "📋 应用 ${{ matrix.config }}.config..." | tee -a $CONFIG_LOG
+              cat "../.github/configs/${{ matrix.config }}.config" >> .config
+              echo "✓ 已应用 ${{ matrix.config }}.config" | tee -a $CONFIG_LOG
           else
-            echo "## ❌ 未找到 ${{ matrix.config }}.config 配置文件" >> $GITHUB_STEP_SUMMARY
-            exit 1
+              echo "❌ 未找到 ${{ matrix.config }}.config 配置文件！" | tee -a $CONFIG_LOG
+              exit 1
           fi
           
           # 重新生成配置
-          make defconfig
+          echo "" >> $CONFIG_LOG
+          echo "🔧 执行 make defconfig..." | tee -a $CONFIG_LOG
+          make defconfig 2>&1 | tee -a $CONFIG_LOG
           
-          # 分析luci软件包变化
-          echo "## 📦 Luci软件包分析 (${{ matrix.config }})" >> $GITHUB_STEP_SUMMARY
-          echo "### 合并前luci软件包:" >> $GITHUB_STEP_SUMMARY
-          grep "CONFIG_PACKAGE_luci-.*=y" .config.base | wc -l | tee -a $GITHUB_STEP_SUMMARY
-          echo "### 合并后luci软件包:" >> $GITHUB_STEP_SUMMARY
-          grep "CONFIG_PACKAGE_luci-.*=y" .config | wc -l | tee -a $GITHUB_STEP_SUMMARY
-          
-          # 显示新增的luci软件包
-          echo "### 新增的luci软件包:" >> $GITHUB_STEP_SUMMARY
-          comm -13 <(grep "CONFIG_PACKAGE_luci-.*=y" .config.base | sort) \
-                   <(grep "CONFIG_PACKAGE_luci-.*=y" .config | sort) | \
-            sed 's/.*CONFIG_PACKAGE_\(.*\)=y/- \1/' | tee -a $GITHUB_STEP_SUMMARY || true
-
-      - name: 🏗️ 编译固件
-        run: |
-          cd openwrt
-          
-          # 设置编译参数
-          echo "## ⚙️ 编译参数设置" >> $GITHUB_STEP_SUMMARY
-          echo "- 并行数: $(nproc)" >> $GITHUB_STEP_SUMMARY
-          echo "- 配置: ${{ matrix.config }}" >> $GITHUB_STEP_SUMMARY
-          
-          # 开始编译
-          echo "## 🏗️ 开始编译固件 (${{ matrix.config }})" >> $GITHUB_STEP_SUMMARY
-          make -j$(nproc) 2>&1 | tee compile.log
-          
-          # 检查编译结果
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "## ❌ 编译失败！" >> $GITHUB_STEP_SUMMARY
-            echo "### 错误日志（最后1000行）:" >> $GITHUB_STEP_SUMMARY
-            tail -1000 compile.log >> $GITHUB_STEP_SUMMARY
-            exit 1
+          if [ ${PIPESTATUS[0]} -eq 0 ]; then
+              echo "✓ make defconfig 成功" >> $GITHUB_STEP_SUMMARY
+          else
+              echo "❌ make defconfig 失败！" >> $GITHUB_STEP_SUMMARY
+              tail -50 $CONFIG_LOG >> $GITHUB_STEP_SUMMARY
+              exit 1
           fi
           
-          echo "## ✅ 编译完成 (${{ matrix.config }})" >> $GITHUB_STEP_SUMMARY
+          # 分析luci软件包变化
+          echo "" >> $CONFIG_LOG
+          echo "=== ${{ matrix.config }} luci软件包分析 ===" >> $CONFIG_LOG
+          
+          # 提取基础配置的luci软件包
+          grep 'CONFIG_PACKAGE_luci-.*=y' .config.base | sort > /tmp/luci_base.txt
+          # 提取应用用户配置后的luci软件包
+          grep 'CONFIG_PACKAGE_luci-.*=y' .config | sort > /tmp/luci_user.txt
+          
+          # 统计信息
+          BASE_LUCI_COUNT=$(wc -l < /tmp/luci_base.txt)
+          USER_LUCI_COUNT=$(wc -l < /tmp/luci_user.txt)
+          
+          echo "基础配置luci软件包数: $BASE_LUCI_COUNT" >> $CONFIG_LOG
+          echo "${{ matrix.config }}配置luci软件包数: $USER_LUCI_COUNT" >> $CONFIG_LOG
+          
+          # 找出新增的软件包
+          echo "" >> $CONFIG_LOG
+          echo "新增的luci软件包：" >> $CONFIG_LOG
+          comm -13 /tmp/luci_base.txt /tmp/luci_user.txt | while read line; do
+              pkg=$(echo $line | sed 's/CONFIG_PACKAGE_\(.*\)=y/\1/')
+              echo "+ $pkg" >> $CONFIG_LOG
+          done
+          
+          # 找出删除的软件包
+          echo "" >> $CONFIG_LOG
+          echo "删除的luci软件包：" >> $CONFIG_LOG
+          comm -23 /tmp/luci_base.txt /tmp/luci_user.txt | while read line; do
+              pkg=$(echo $line | sed 's/CONFIG_PACKAGE_\(.*\)=y/\1/')
+              echo "- $pkg" >> $CONFIG_LOG
+          done
+          
+          # 在GitHub摘要中显示变化
+          echo "### 📦 ${{ matrix.config }} 配置luci软件包变化" >> $GITHUB_STEP_SUMMARY
+          
+          NEW_COUNT=$(comm -13 /tmp/luci_base.txt /tmp/luci_user.txt | wc -l)
+          REMOVED_COUNT=$(comm -23 /tmp/luci_base.txt /tmp/luci_user.txt | wc -l)
+          
+          echo "- 基础配置: $BASE_LUCI_COUNT 个" >> $GITHUB_STEP_SUMMARY
+          echo "- ${{ matrix.config }}配置: $USER_LUCI_COUNT 个" >> $GITHUB_STEP_SUMMARY
+          echo "- 变化: +$NEW_COUNT / -$REMOVED_COUNT" >> $GITHUB_STEP_SUMMARY
+          
+          # 高亮显示新增的软件包
+          if [ $NEW_COUNT -gt 0 ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "#### 🟢 新增的软件包 ($NEW_COUNT 个):" >> $GITHUB_STEP_SUMMARY
+              comm -13 /tmp/luci_base.txt /tmp/luci_user.txt | head -20 | while read line; do
+                  pkg=$(echo $line | sed 's/CONFIG_PACKAGE_\(.*\)=y/\1/')
+                  echo "- **$pkg**" >> $GITHUB_STEP_SUMMARY
+              done
+              if [ $NEW_COUNT -gt 20 ]; then
+                  echo "- ... 还有 $((NEW_COUNT - 20)) 个" >> $GITHUB_STEP_SUMMARY
+              fi
+          fi
+          
+          # 高亮显示删除的软件包（警告）
+          if [ $REMOVED_COUNT -gt 0 ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "#### 🔴 删除的软件包 (警告 $REMOVED_COUNT 个):" >> $GITHUB_STEP_SUMMARY
+              comm -23 /tmp/luci_base.txt /tmp/luci_user.txt | head -10 | while read line; do
+                  pkg=$(echo $line | sed 's/CONFIG_PACKAGE_\(.*\)=y/\1/')
+                  echo "- ~~$pkg~~" >> $GITHUB_STEP_SUMMARY
+              done
+              if [ $REMOVED_COUNT -gt 10 ]; then
+                  echo "- ... 还有 $((REMOVED_COUNT - 10)) 个" >> $GITHUB_STEP_SUMMARY
+              fi
+          fi
+          
+          # 检查关键luci软件包是否缺失
+          echo "" >> $CONFIG_LOG
+          echo "检查关键luci软件包..." >> $CONFIG_LOG
+          CRITICAL_PACKAGES=("luci-app-passwall" "luci-app-openclash" "luci-app-adblock")
+          MISSING_PACKAGES=()
+          
+          for pkg in "${CRITICAL_PACKAGES[@]}"; do
+              if grep -q "CONFIG_PACKAGE_$pkg=y" .config; then
+                  echo "✓ $pkg 存在" >> $CONFIG_LOG
+              else
+                  echo "❌ $pkg 缺失！" >> $CONFIG_LOG
+                  MISSING_PACKAGES+=("$pkg")
+              fi
+          done
+          
+          # 如果有关键软件包缺失，显示警告
+          if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "#### ⚠️ 关键软件包缺失警告:" >> $GITHUB_STEP_SUMMARY
+              for pkg in "${MISSING_PACKAGES[@]}"; do
+                  echo "- **$pkg**" >> $GITHUB_STEP_SUMMARY
+              done
+          fi
+          
+          echo "✓ ${{ matrix.config }} 配置应用完成" >> $GITHUB_STEP_SUMMARY
+
+      - name: 🏗️ 编译固件
+        id: compile-firmware
+        run: |
+          set -e  # 严格错误退出
+          
+          cd openwrt
+          
+          echo "## 🏗️ 开始编译固件 (${{ matrix.config }})" >> $GITHUB_STEP_SUMMARY
+          
+          # 设置编译参数
+          echo "### ⚙️ 编译参数" >> $GITHUB_STEP_SUMMARY
+          echo "- 并行数: $(nproc)" >> $GITHUB_STEP_SUMMARY
+          echo "- 配置: ${{ matrix.config }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 目标: ${{ needs.setup-and-base-build.outputs.device-list }}" >> $GITHUB_STEP_SUMMARY
+          
+          # 开始编译
+          echo "🔨 执行 make -j$(nproc)..." | tee -a ../${{ env.LOG_DIR }}/compile_${{ matrix.config }}.log
+          make -j$(nproc) 2>&1 | tee -a ../${{ env.LOG_DIR }}/compile_${{ matrix.config }}.log
+          
+          # 检查编译结果
+          if [ ${PIPESTATUS[0]} -eq 0 ]; then
+              echo "✅ 编译成功 (${{ matrix.config }})" >> $GITHUB_STEP_SUMMARY
+              
+              # 统计编译产物
+              FIRMWARE_COUNT=$(find bin/targets/ -name "*.bin" -type f | wc -l)
+              echo "- 生成固件数: $FIRMWARE_COUNT" >> $GITHUB_STEP_SUMMARY
+          else
+              echo "❌ 编译失败 (${{ matrix.config }})！" >> $GITHUB_STEP_SUMMARY
+              echo "### 错误日志（最后1000行）" >> $GITHUB_STEP_SUMMARY
+              tail -1000 ../${{ env.LOG_DIR }}/compile_${{ matrix.config }}.log >> $GITHUB_STEP_SUMMARY
+              exit 1
+          fi
 
       - name: 📦 收集编译产物
+        id: collect-artifacts
         run: |
           cd openwrt
+          
+          echo "## 📦 收集编译产物 (${{ matrix.config }})" >> $GITHUB_STEP_SUMMARY
           
           # 创建临时目录
           TEMP_DIR="../temp_${{ matrix.config }}"
           mkdir -p "${TEMP_DIR}"
           
           # 复制固件文件
-          echo "## 📦 收集固件文件" >> $GITHUB_STEP_SUMMARY
+          echo "### 📱 收集固件文件" >> $GITHUB_STEP_SUMMARY
+          FIRMWARE_LIST=()
+          
           find bin/targets/ -name "*squashfs-*" -type f | while read file; do
-            # 提取设备名称
-            DEVICE=$(echo "$file" | grep -oE "DEVICE_[^/]+" | sed 's/DEVICE_//' || echo "unknown")
-            
-            # 根据文件类型重命名
-            if [[ "$file" == *"factory"* ]]; then
-              NEW_NAME="${{ env.REPO_SHORT }}-${DEVICE}-factory-${{ matrix.config }}.bin"
-            elif [[ "$file" == *"sysupgrade"* ]]; then
-              NEW_NAME="${{ env.REPO_SHORT }}-${DEVICE}-sysupgrade-${{ matrix.config }}.bin"
-            fi
-            
-            cp "$file" "${TEMP_DIR}/${NEW_NAME}"
-            echo "- ${NEW_NAME}" >> $GITHUB_STEP_SUMMARY
+              # 提取设备名称
+              DEVICE=$(echo "$file" | grep -oE "DEVICE_[^/]+" | sed 's/DEVICE_//' || echo "unknown")
+              
+              # 根据文件类型重命名
+              if [[ "$file" == *"factory"* ]]; then
+                  NEW_NAME="${{ env.REPO_SHORT }}-${DEVICE}-factory-${{ matrix.config }}.bin"
+              elif [[ "$file" == *"sysupgrade"* ]]; then
+                  NEW_NAME="${{ env.REPO_SHORT }}-${DEVICE}-sysupgrade-${{ matrix.config }}.bin"
+              fi
+              
+              cp "$file" "${TEMP_DIR}/${NEW_NAME}"
+              echo "- ${NEW_NAME}" >> $GITHUB_STEP_SUMMARY
+              FIRMWARE_LIST+=("$NEW_NAME")
           done
           
           # 复制配置文件
-          echo "## 📄 收集配置文件" >> $GITHUB_STEP_SUMMARY
+          echo "### 📄 收集配置文件" >> $GITHUB_STEP_SUMMARY
           for device in ${{ needs.setup-and-base-build.outputs.device-list }}; do
-            cp .config "${TEMP_DIR}/${{ env.REPO_SHORT }}-${device}-${{ matrix.config }}.config"
-            cp bin/targets/*/*/manifest "${TEMP_DIR}/${{ env.REPO_SHORT }}-${device}-${{ matrix.config }}.manifest" 2>/dev/null || true
-            cp config.buildinfo "${TEMP_DIR}/${{ env.REPO_SHORT }}-${device}-${{ matrix.config }}.config.buildinfo" 2>/dev/null || true
+              # .config文件
+              if [ -f ".config" ]; then
+                  cp .config "${TEMP_DIR}/${{ env.REPO_SHORT }}-${device}-${{ matrix.config }}.config"
+              fi
+              
+              # .manifest文件
+              MANIFEST_FILE=$(find bin/targets/ -name "manifest" -type f | head -1)
+              if [ -n "$MANIFEST_FILE" ]; then
+                  cp "$MANIFEST_FILE" "${TEMP_DIR}/${{ env.REPO_SHORT }}-${device}-${{ matrix.config }}.manifest"
+              fi
+              
+              # config.buildinfo文件
+              if [ -f "config.buildinfo" ]; then
+                  cp config.buildinfo "${TEMP_DIR}/${{ env.REPO_SHORT }}-${device}-${{ matrix.config }}.config.buildinfo"
+              fi
           done
           
           # 收集软件包
-          echo "## 📦 收集软件包" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 收集软件包" >> $GITHUB_STEP_SUMMARY
           mkdir -p "${TEMP_DIR}/packages"
+          PACKAGE_COUNT=0
+          
           find bin/packages/ -name "*.ipk" -o -name "*.apk" 2>/dev/null | while read pkg; do
-            cp "$pkg" "${TEMP_DIR}/packages/"
+              cp "$pkg" "${TEMP_DIR}/packages/"
+              PACKAGE_COUNT=$((PACKAGE_COUNT + 1))
           done
+          
+          echo "- 收集软件包数: $PACKAGE_COUNT" >> $GITHUB_STEP_SUMMARY
           
           # 打包软件包
           cd "${TEMP_DIR}"
@@ -302,6 +850,21 @@ jobs:
           
           # 打包配置文件
           tar -czf "ipq60xx-config-${{ matrix.config }}.tar.gz" *.config *.manifest *.config.buildinfo 2>/dev/null || true
+          
+          # 创建文件清单
+          echo "=== ${{ matrix.config }} 产物清单 ===" > file_list.txt
+          echo "生成时间: $(date)" >> file_list.txt
+          echo "" >> file_list.txt
+          echo "固件文件:" >> file_list.txt
+          ls -la *.bin >> file_list.txt 2>/dev/null || true
+          echo "" >> file_list.txt
+          echo "配置文件:" >> file_list.txt
+          ls -la *.config *.manifest *.config.buildinfo >> file_list.txt 2>/dev/null || true
+          echo "" >> file_list.txt
+          echo "软件包:" >> file_list.txt
+          echo "ipq60xx-app-${{ matrix.config }}.tar.gz" >> file_list.txt
+          
+          echo "✓ 产物收集完成" >> $GITHUB_STEP_SUMMARY
 
       - name: 📤 上传编译产物
         uses: actions/upload-artifact@v4
@@ -324,76 +887,141 @@ jobs:
           path: artifacts/
 
       - name: 📦 整理发布文件
+        id: prepare-release
         run: |
+          set -e  # 严格错误退出
+          
+          echo "## 📦 整理发布文件" >> $GITHUB_STEP_SUMMARY
+          
+          # 创建发布目录
           mkdir -p release/
           
           # 合并所有配置文件
-          echo "## 📦 整理配置文件" >> $GITHUB_STEP_SUMMARY
-          cat artifacts/firmware-*/ipq60xx-config-*.tar.gz | tar -xz -C release/ 2>/dev/null || true
+          echo "### 📄 整理配置文件" >> $GITHUB_STEP_SUMMARY
+          find artifacts/ -name "*.config" -type f | while read config; do
+              cp "$config" release/
+          done
           
-          # 合并所有软件包
-          echo "## 📦 合并软件包" >> $GITHUB_STEP_SUMMARY
+          # 打包所有配置文件
+          cd release/
+          tar -czf "ipq60xx-config.tar.gz" *.config
+          rm -f *.config
+          cd ..
+          
+          # 合并所有软件包（允许覆盖）
+          echo "### 📦 合并软件包" >> $GITHUB_STEP_SUMMARY
           mkdir -p release/packages/
           find artifacts/ -name "*.ipk" -o -name "*.apk" | while read pkg; do
-            cp "$pkg" release/packages/
+              cp "$pkg" release/packages/ 2>/dev/null || true
           done
+          
+          # 打包所有软件包
           cd release/
           tar -czf "ipq60xx-app.tar.gz" packages/
+          rm -rf packages/
+          cd ..
           
           # 复制所有固件
-          echo "## 📦 收集固件文件" >> $GITHUB_STEP_SUMMARY
+          echo "### 📱 收集固件文件" >> $GITHUB_STEP_SUMMARY
+          FIRMWARE_COUNT=0
           find artifacts/ -name "*.bin" -type f | while read bin; do
-            cp "$bin" release/
-            echo "- $(basename $bin)" >> $GITHUB_STEP_SUMMARY
+              cp "$bin" release/
+              FIRMWARE_COUNT=$((FIRMWARE_COUNT + 1))
+              echo "- $(basename $bin)" >> $GITHUB_STEP_SUMMARY
           done
           
           # 生成软件包列表
-          echo "## 📋 生成的luci-app列表:" >> $GITHUB_STEP_SUMMARY
-          find packages/ -name "luci-app-*.ipk" -o -name "luci-app-*.apk" | \
-            sed 's/.*\///g' | sed 's/\.ipk$//' | sed 's/\.apk$//' | \
-            sort | while read app; do
-              echo "- $app" >> $GITHUB_STEP_SUMMARY
-            done
+          echo "### 📋 生成的luci-app列表:" >> $GITHUB_STEP_SUMMARY
+          tar -tzf release/ipq60xx-app.tar.gz | grep "luci-app-" | \
+              sed 's/.*\///g' | sed 's/\.ipk$//' | sed 's/\.apk$//' | \
+              sort | while read app; do
+                  echo "- $app" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          echo "✓ 发布文件整理完成" >> $GITHUB_STEP_SUMMARY
 
       - name: 📝 生成Release说明
+        id: generate-notes
         run: |
-          cat > release/NOTES.md << EOF
+          # 生成详细的Release说明
+          cat > release/NOTES.md << 'EOF'
           # ImmortalWrt 固件发布
           
           ## 📋 基本信息
-          - **默认管理地址**: ${{ env.DEFAULT_IP }}
+          - **默认管理地址**: 192.168.111.1
           - **默认用户**: root
-          - **默认密码**: ${{ env.DEFAULT_PASSWORD }}
-          - **默认WIFI密码**: ${{ env.DEFAULT_WIFI_PASSWORD }}
+          - **默认密码**: 无（空密码）
+          - **默认WIFI密码**: 12345678
           
           ## 🏗️ 构建信息
-          - **分支**: ${{ env.REPO_SHORT }}
-          - **内核版本**: ${{ needs.setup-and-base-build.outputs.kernel-version }}
-          - **构建日期**: ${{ needs.setup-and-base-build.outputs.build-date }}
-          - **作者**: ${{ env.AUTHOR_NAME }}
+          - **分支**: immwrt (ImmortalWrt)
+          - **内核版本**: KERNEL_VERSION_PLACEHOLDER
+          - **构建日期**: BUILD_DATE_PLACEHOLDER
+          - **作者**: Mary
+          - **芯片架构**: IPQ60xx
           
           ## 📱 支持的设备
-          ${{ needs.setup-and-base-build.outputs.device-list }}
+          DEVICE_LIST_PLACEHOLDER
           
-          ## 📦 配置版本
-          - Pro: 基础配置
-          - Max: 增强配置
-          - Ultra: 完整配置
+          ## 📦 配置版本说明
+          - **Pro**: 基础增强配置，包含常用网络工具和基础应用
+          - **Max**: 高级配置，包含PassWall、OpenClash等高级网络功能
+          - **Ultra**: 完整配置，包含所有可用功能和应用
           
-          ## 📋 包含的luci应用
-          $(find release/packages/ -name "luci-app-*.ipk" -o -name "luci-app-*.apk" | sed 's/.*\///g' | sed 's/\.ipk$//' | sed 's/\.apk$//' | sed 's/^/- /' | sort)
+          ## 📋 包含的主要luci应用
+          LUCI_APPS_PLACEHOLDER
+          
+          ## 📁 文件说明
+          - `*-factory-*.bin`: 首次刷机使用
+          - `*-sysupgrade-*.bin`: 系统升级使用
+          - `ipq60xx-config.tar.gz`: 所有配置文件
+          - `ipq60xx-app.tar.gz`: 所有软件包
           
           ## ⚠️ 注意事项
           1. 刷机前请备份原配置
           2. 首次刷机建议使用factory固件
           3. 升级请使用sysupgrade固件
           4. 刷机后需恢复出厂设置
+          5. 如遇问题请查看日志文件
+          
+          ## 🔧 刷机步骤
+          1. 下载对应设备的固件
+          2. 进入原路由器后台
+          3. 选择固件升级
+          4. 上传factory固件
+          5. 等待重启完成
+          6. 恢复出厂设置
+          7. 使用 192.168.111.1 登录
           
           ---
-          构建时间: $(date +'%Y-%m-%d %H:%M:%S')
+          构建时间: BUILD_TIME_PLACEHOLDER
           EOF
+          
+          # 替换占位符
+          sed -i "s/KERNEL_VERSION_PLACEHOLDER/${{ needs.setup-and-base-build.outputs.kernel-version }}/g" release/NOTES.md
+          sed -i "s/BUILD_DATE_PLACEHOLDER/${{ needs.setup-and-base-build.outputs.build-date }}/g" release/NOTES.md
+          sed -i "s/BUILD_TIME_PLACEHOLDER/$(date +'%Y-%m-%d %H:%M:%S')/g" release/NOTES.md
+          
+          # 添加设备列表
+          echo "" >> release/NOTES.md
+          echo "## 📱 支持的设备详情" >> release/NOTES.md
+          for device in ${{ needs.setup-and-base-build.outputs.device-list }}; do
+              echo "- $device" >> release/NOTES.md
+          done
+          
+          # 添加luci应用列表
+          echo "" >> release/NOTES.md
+          echo "## 📋 完整的luci应用列表" >> release/NOTES.md
+          tar -tzf release/ipq60xx-app.tar.gz | grep "luci-app-" | \
+              sed 's/.*\///g' | sed 's/\.ipk$//' | sed 's/\.apk$//' | \
+              sort | while read app; do
+                  echo "- $app" >> release/NOTES.md
+          done
+          
+          echo "✓ Release说明生成完成" >> $GITHUB_STEP_SUMMARY
 
       - name: 🚀 发布到GitHub Release
+        id: create-release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ipq60xx-${{ needs.setup-and-base-build.outputs.build-date }}
@@ -411,3 +1039,10 @@ jobs:
         run: |
           echo "## 📊 最终磁盘空间" >> $GITHUB_STEP_SUMMARY
           df -h | tee -a $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 发布统计" >> $GITHUB_STEP_SUMMARY
+          echo "- Release标签: ipq60xx-${{ needs.setup-and-base-build.outputs.build-date }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 固件文件数: $(ls release/*.bin 2>/dev/null | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo "- 配置包: ipq60xx-config.tar.gz" >> $GITHUB_STEP_SUMMARY
+          echo "- 软件包: ipq60xx-app.tar.gz" >> $GITHUB_STEP_SUMMARY
