@@ -1,7 +1,18 @@
+# ====================================================
+# 工作流名称: OpenWrt 多分支多配置自动化编译
+# 描述: 此工作流用于自动编译 OpenWrt 及其衍生分支的固件。
+#       支持多分支、多配置并行编译，并自动发布到 GitHub Release。
+#       包含企业级的日志、错误控制和缓存机制。
+# 作者: Mary
+# ====================================================
+
 name: OpenWrt Multi-Branch Multi-Config Build
 
+# ====================================================
+# 触发器
+# ====================================================
 on:
-  # 手动触发，允许用户选择操作系统
+  # 手动触发，允许用户选择操作系统版本
   workflow_dispatch:
     inputs:
       ubuntu_version:
@@ -15,7 +26,7 @@ on:
   # 定时触发，北京时间每周五0点 (UTC+8) -> UTC 16:00
   schedule:
     - cron: '0 16 * * 4'
-  # 推送到main分支时触发
+  # 代码推送触发，当推送到main分支且特定文件有变化时
   push:
     branches:
       - main
@@ -24,10 +35,12 @@ on:
       - 'configs/**'
       - 'scripts/**'
 
+# ====================================================
 # 全局环境变量
+# ====================================================
 env:
-  CHIPSET: ipq60xx
-  LOG_FILE: build.log
+  CHIPSET: ipq60xx # 定义芯片架构
+  LOG_FILE: build.log # 定义日志文件名
   # Release 相关信息
   DEFAULT_IP: "192.168.111.1"
   DEFAULT_USER: "root"
@@ -35,8 +48,12 @@ env:
   DEFAULT_WIFI_PASS: "12345678"
   AUTHOR: "Mary"
 
+# ====================================================
+# 作业定义
+# ====================================================
 jobs:
-  # Job 1: 准备基础编译环境 (串行处理所有分支)
+  # Job 1: 准备基础编译环境
+  # 此Job负责为所有分支下载源码、安装Feeds、下载依赖，并生成共享缓存
   prepare-env:
     name: 准备编译环境
     runs-on: ${{ github.event.inputs.ubuntu_version || 'ubuntu-22.04' }}
@@ -49,23 +66,39 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4 # 使用 v4 版本的 checkout action
 
       - name: 初始化环境
         run: |
-          # 加载通用函数，使用绝对路径
+          # ====================================================
+          # 诊断步骤：检查文件是否存在
+          # ====================================================
+          echo "🔍 [诊断] 检查仓库根目录 ($GITHUB_WORKSPACE) 的内容："
+          ls -l $GITHUB_WORKSPACE
+          echo "----------------------------------------"
+          echo "🔍 [诊断] 检查脚本目录 ($GITHUB_WORKSPACE/.github/scripts) 的内容："
+          ls -l $GITHUB_WORKSPACE/.github/scripts/
+          echo "----------------------------------------"
+          # 如果 common.sh 不存在，脚本会在这里报错并终止，上面的 ls 命令会告诉我们原因
+          
+          # ====================================================
+          # 正式步骤：加载通用函数并设置环境
+          # ====================================================
+          # 加载通用函数库，使用绝对路径确保能找到文件
           source $GITHUB_WORKSPACE/.github/scripts/common.sh
           step_start "初始化编译环境"
-          # 清理磁盘空间
+          
+          # 清理磁盘空间，移除不必要的预装软件
           check_disk_space
-          # 安装依赖
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo -E apt-get -qq update
+          # 安装 OpenWrt 编译所需的依赖包
           sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2204)
           sudo -E apt-get -qq autoremove --purge
           sudo -E apt-get -qq clean
+          # 设置时区为北京时间
           sudo timedatectl set-timezone "Asia/Shanghai"
-          # 创建工作目录
+          # 创建一个独立的工作目录，避免权限问题
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
           step_end "初始化编译环境"
@@ -75,7 +108,9 @@ jobs:
         run: |
           source $GITHUB_WORKSPACE/.github/scripts/common.sh
           step_start "提取设备名"
+          # 从芯片基础配置文件中提取所有设备名
           local devices=$(extract_device_names "$GITHUB_WORKSPACE/.github/configs/base_${{ env.CHIPSET }}.config")
+          # 将设备名列表设置为输出，供其他job使用
           echo "devices=$devices" >> $GITHUB_OUTPUT
           step_end "提取设备名"
 
@@ -84,10 +119,12 @@ jobs:
         run: |
           source $GITHUB_WORKSPACE/.github/scripts/common.sh
           step_start "生成缓存哈希文件"
+          # 生成一个基于脚本和配置文件的哈希文件名，用于缓存key
           local hash_file="hashes-${{ env.CHIPSET }}.txt"
           generate_hashes_file "$hash_file" \
             "$GITHUB_WORKSPACE/.github/scripts/" \
             "$GITHUB_WORKSPACE/.github/configs/base_${{ env.CHIPSET }}.config"
+          # 将哈希文件名设置为输出
           echo "name=$hash_file" >> $GITHUB_OUTPUT
           step_end "生成缓存哈希文件"
 
@@ -122,39 +159,39 @@ jobs:
           source $GITHUB_WORKSPACE/.github/scripts/common.sh
           step_start "准备所有分支环境 (串行)"
           
-          # 定义分支信息数组
+          # 使用关联数组定义所有分支的信息
           declare -A branches=(
             ["immwrt"]="https://github.com/laipeng668/immortalwrt.git master immwrt"
             ["openwrt"]="https://github.com/laipeng668/openwrt.git master openwrt"
             ["libwrt"]="https://github.com/laipeng668/openwrt-6.x.git k6.12-nss libwrt"
           )
           
+          # 循环处理每个分支
           for branch_key in "${!branches[@]}"; do
             IFS=' ' read -r repo_url repo_branch repo_short <<< "${branches[$branch_key]}"
             log_info "开始处理分支: ${repo_short}"
             
-            # 克隆源码
+            # 克隆源码到 /workdir
             log_info "克隆 ${repo_url}..."
             git clone "${repo_url}" -b "${repo_branch}" --single-branch "/workdir/${repo_short}"
             
-            # 执行自定义脚本
+            # 执行该分支的自定义脚本
             log_info "执行 ${repo_short} 的自定义脚本..."
             cd "/workdir/${repo_short}"
-            # 使用绝对路径调用脚本
             "${GITHUB_WORKSPACE}/.github/scripts/custom_${repo_short}.sh"
             
-            # 更新和安装 Feeds
+            # 更新和安装所有软件源
             log_info "更新和安装 Feeds..."
             ./scripts/feeds update -a
             ./scripts/feeds install -a
             
-            # 合并基础配置
+            # 合并芯片基础配置和分支基础配置
             log_info "合并基础配置文件..."
             cat "${GITHUB_WORKSPACE}/.github/configs/base_${{ env.CHIPSET }}.config" > .config
             cat "${GITHUB_WORKSPACE}/.github/configs/base_${repo_short}.config" >> .config
             make defconfig
             
-            # 下载源码
+            # 下载所有软件包的源代码
             log_info "下载所有软件包源码..."
             make download -j$(nproc)
             
@@ -174,17 +211,19 @@ jobs:
       - name: 设置输出
         id: set-outputs
         run: |
-          # 将所有分支名用逗号连接
+          # 将所有分支名用逗号连接，传递给矩阵编译job
           echo "branches=immwrt,openwrt,libwrt" >> $GITHUB_OUTPUT
 
   # Job 2: 矩阵编译
+  # 此Job基于准备好的环境，并行编译所有分支和配置的组合
   build:
     name: 编译固件 (${{ matrix.branch }}-${{ matrix.config }})
     needs: prepare-env
     runs-on: ${{ github.event.inputs.ubuntu_version || 'ubuntu-22.04' }}
     strategy:
-      fail-fast: false # 允许某个配置失败，其他继续
+      fail-fast: false # 允许某个配置失败，其他继续编译
       matrix:
+        # 从 prepare-env job 的输出中获取分支列表
         branch: ${{ fromJson(format('["%s"]', needs.prepare-env.outputs.built_branches)) }}
         config: [Pro, Max, Ultra]
 
@@ -226,16 +265,16 @@ jobs:
           
           cd /workdir/${{ matrix.branch }}
           
-          # 保存合并前的配置
+          # 保存合并前的配置，用于对比
           cp .config .config.before
           
           # 合并用户配置
           cat "$GITHUB_WORKSPACE/.github/configs/${{ matrix.config }}.config" >> .config
           
-          # 格式化并补全配置
+          # 格式化并补全配置文件
           make defconfig
           
-          # 对比 LuCI 包
+          # 对比 LuCI 包，如果失败则退出
           if ! compare_luci_packages ".config.before" ".config"; then
             log_error "LuCI 软件包检查失败，请检查配置文件！"
             exit 1
@@ -249,6 +288,7 @@ jobs:
           step_start "编译 ${{ matrix.branch }}-${{ matrix.config }} 固件"
           cd /workdir/${{ matrix.branch }}
           export CCACHE_DIR=/workdir/.ccache
+          # 使用所有CPU核心编译，如果失败则使用单核详细编译
           make -j$(nproc) || make -j1 V=s
           step_end "编译 ${{ matrix.branch }}-${{ matrix.config }} 固件"
 
@@ -260,6 +300,7 @@ jobs:
           local source_dir="/workdir/${{ matrix.branch }}/bin/targets/${{ env.CHIPSET }}"
           local target_dir="/workdir/artifacts/${{ matrix.branch }}-${{ matrix.config }}"
           
+          # 调用通用函数进行重命名和打包
           rename_and_package_artifacts "$source_dir" "$target_dir" "${{ matrix.branch }}" "${{ env.CHIPSET }}" "${{ matrix.config }}" "${{ needs.prepare-env.outputs.device_names }}"
           
           step_end "整理 ${{ matrix.branch }}-${{ matrix.config }} 产出物"
@@ -272,6 +313,7 @@ jobs:
           retention-days: 1
 
   # Job 3: 发布
+  # 此Job负责收集所有产出物，创建并发布到 GitHub Release
   publish:
     name: 发布到 Release
     needs: [prepare-env, build]
@@ -318,6 +360,7 @@ jobs:
           local kernel_version=$(find /tmp/artifacts -name "*.manifest" -exec grep -m1 '^kernel:' {} \; | head -n1 | cut -d' ' -f2)
           local luci_apps=$(find /tmp/release -name "*.manifest" -exec grep -h 'luci-app-' {} \; | sort -u | tr '\n' ', ')
           
+          # 使用 cat 生成 Release 说明
           cat > /tmp/release_body.md << EOF
           ## OpenWrt 固件发布
           
@@ -372,6 +415,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Job 4: 清理
+  # 此Job负责清理所有中间产物，避免仓库空间膨胀
   cleanup:
     name: 清理 Artifacts
     needs: [prepare-env, build, publish]
