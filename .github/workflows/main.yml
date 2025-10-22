@@ -173,9 +173,9 @@ jobs:
             log_info "执行 ${repo_short} 的自定义脚本..."
             cd "/workdir/${repo_short}"
             
-            # 【修正】在执行前为脚本添加执行权限
+            # 在执行前为脚本添加执行权限
             chmod +x "$GITHUB_WORKSPACE/scripts/custom_${repo_short}.sh"
-            # 【修正】使用 source 命令加载脚本，使其能访问父 shell 的函数
+            # 使用 source 命令加载脚本，使其能访问父 shell 的函数
             source "$GITHUB_WORKSPACE/scripts/custom_${repo_short}.sh"
             
             # 更新和安装所有软件源
@@ -403,7 +403,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.generate_body.outputs.tag }}
-          body_path: ${{ steps.generate_body.outputs.body_file }
+          # 【修正】在末尾添加了缺失的 '}'
+          body_path: ${{ steps.generate_body.outputs.body_file }}
           files: |
             /tmp/release/*.bin
             /tmp/release/*.tar.gz
