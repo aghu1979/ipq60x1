@@ -175,7 +175,8 @@ jobs:
             
             # 【修正】在执行前为脚本添加执行权限
             chmod +x "$GITHUB_WORKSPACE/scripts/custom_${repo_short}.sh"
-            "$GITHUB_WORKSPACE/scripts/custom_${repo_short}.sh"
+            # 【修正】使用 source 命令加载脚本，使其能访问父 shell 的函数
+            source "$GITHUB_WORKSPACE/scripts/custom_${repo_short}.sh"
             
             # 更新和安装所有软件源
             log_info "更新和安装 Feeds..."
@@ -402,7 +403,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.generate_body.outputs.tag }}
-          body_path: ${{ steps.generate_body.outputs.body_file }}
+          body_path: ${{ steps.generate_body.outputs.body_file }
           files: |
             /tmp/release/*.bin
             /tmp/release/*.tar.gz
