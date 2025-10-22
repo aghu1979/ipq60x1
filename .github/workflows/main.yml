@@ -71,21 +71,10 @@ jobs:
       - name: 初始化环境
         run: |
           # ====================================================
-          # 诊断步骤：检查文件是否存在
+          # 加载通用函数并设置环境
           # ====================================================
-          echo "🔍 [诊断] 检查仓库根目录 ($GITHUB_WORKSPACE) 的内容："
-          ls -l $GITHUB_WORKSPACE
-          echo "----------------------------------------"
-          echo "🔍 [诊断] 检查脚本目录 ($GITHUB_WORKSPACE/.github/scripts) 的内容："
-          ls -l $GITHUB_WORKSPACE/.github/scripts/
-          echo "----------------------------------------"
-          # 如果 common.sh 不存在，脚本会在这里报错并终止，上面的 ls 命令会告诉我们原因
-          
-          # ====================================================
-          # 正式步骤：加载通用函数并设置环境
-          # ====================================================
-          # 加载通用函数库，使用绝对路径确保能找到文件
-          source $GITHUB_WORKSPACE/.github/scripts/common.sh
+          # 加载通用函数库，路径为仓库根目录下的 scripts 文件夹
+          source $GITHUB_WORKSPACE/scripts/common.sh
           step_start "初始化编译环境"
           
           # 清理磁盘空间，移除不必要的预装软件
@@ -106,10 +95,10 @@ jobs:
       - name: 提取设备名
         id: extract_devices
         run: |
-          source $GITHUB_WORKSPACE/.github/scripts/common.sh
+          source $GITHUB_WORKSPACE/scripts/common.sh
           step_start "提取设备名"
-          # 从芯片基础配置文件中提取所有设备名
-          local devices=$(extract_device_names "$GITHUB_WORKSPACE/.github/configs/base_${{ env.CHIPSET }}.config")
+          # 从芯片基础配置文件中提取所有设备名，路径为仓库根目录下的 configs 文件夹
+          local devices=$(extract_device_names "$GITHUB_WORKSPACE/configs/base_${{ env.CHIPSET }}.config")
           # 将设备名列表设置为输出，供其他job使用
           echo "devices=$devices" >> $GITHUB_OUTPUT
           step_end "提取设备名"
@@ -117,13 +106,13 @@ jobs:
       - name: 生成缓存哈希文件
         id: hash
         run: |
-          source $GITHUB_WORKSPACE/.github/scripts/common.sh
+          source $GITHUB_WORKSPACE/scripts/common.sh
           step_start "生成缓存哈希文件"
           # 生成一个基于脚本和配置文件的哈希文件名，用于缓存key
           local hash_file="hashes-${{ env.CHIPSET }}.txt"
           generate_hashes_file "$hash_file" \
-            "$GITHUB_WORKSPACE/.github/scripts/" \
-            "$GITHUB_WORKSPACE/.github/configs/base_${{ env.CHIPSET }}.config"
+            "$GITHUB_WORKSPACE/scripts/" \
+            "$GITHUB_WORKSPACE/configs/base_${{ env.CHIPSET }}.config"
           # 将哈希文件名设置为输出
           echo "name=$hash_file" >> $GITHUB_OUTPUT
           step_end "生成缓存哈希文件"
@@ -156,7 +145,7 @@ jobs:
 
       - name: 准备所有分支环境 (串行)
         run: |
-          source $GITHUB_WORKSPACE/.github/scripts/common.sh
+          source $GITHUB_WORKSPACE/scripts/common.sh
           step_start "准备所有分支环境 (串行)"
           
           # 使用关联数组定义所有分支的信息
@@ -175,20 +164,20 @@ jobs:
             log_info "克隆 ${repo_url}..."
             git clone "${repo_url}" -b "${repo_branch}" --single-branch "/workdir/${repo_short}"
             
-            # 执行该分支的自定义脚本
+            # 执行该分支的自定义脚本，路径为仓库根目录下的 scripts 文件夹
             log_info "执行 ${repo_short} 的自定义脚本..."
             cd "/workdir/${repo_short}"
-            "${GITHUB_WORKSPACE}/.github/scripts/custom_${repo_short}.sh"
+            "$GITHUB_WORKSPACE/scripts/custom_${repo_short}.sh"
             
             # 更新和安装所有软件源
             log_info "更新和安装 Feeds..."
             ./scripts/feeds update -a
             ./scripts/feeds install -a
             
-            # 合并芯片基础配置和分支基础配置
+            # 合并芯片基础配置和分支基础配置，路径为仓库根目录下的 configs 文件夹
             log_info "合并基础配置文件..."
-            cat "${GITHUB_WORKSPACE}/.github/configs/base_${{ env.CHIPSET }}.config" > .config
-            cat "${GITHUB_WORKSPACE}/.github/configs/base_${repo_short}.config" >> .config
+            cat "$GITHUB_WORKSPACE/configs/base_${{ env.CHIPSET }}.config" > .config
+            cat "$GITHUB_WORKSPACE/configs/base_${repo_short}.config" >> .config
             make defconfig
             
             # 下载所有软件包的源代码
@@ -233,7 +222,7 @@ jobs:
 
       - name: 初始化环境
         run: |
-          source $GITHUB_WORKSPACE/.github/scripts/common.sh
+          source $GITHUB_WORKSPACE/scripts/common.sh
           step_start "初始化编译环境"
           check_disk_space
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
@@ -260,7 +249,7 @@ jobs:
 
       - name: 合并最终配置并检查 LuCI 包
         run: |
-          source $GITHUB_WORKSPACE/.github/scripts/common.sh
+          source $GITHUB_WORKSPACE/scripts/common.sh
           step_start "合并最终配置并检查 LuCI 包"
           
           cd /workdir/${{ matrix.branch }}
@@ -268,8 +257,8 @@ jobs:
           # 保存合并前的配置，用于对比
           cp .config .config.before
           
-          # 合并用户配置
-          cat "$GITHUB_WORKSPACE/.github/configs/${{ matrix.config }}.config" >> .config
+          # 合并用户配置，路径为仓库根目录下的 configs 文件夹
+          cat "$GITHUB_WORKSPACE/configs/${{ matrix.config }}.config" >> .config
           
           # 格式化并补全配置文件
           make defconfig
@@ -284,7 +273,7 @@ jobs:
 
       - name: 编译固件
         run: |
-          source $GITHUB_WORKSPACE/.github/scripts/common.sh
+          source $GITHUB_WORKSPACE/scripts/common.sh
           step_start "编译 ${{ matrix.branch }}-${{ matrix.config }} 固件"
           cd /workdir/${{ matrix.branch }}
           export CCACHE_DIR=/workdir/.ccache
@@ -294,7 +283,7 @@ jobs:
 
       - name: 整理产出物
         run: |
-          source $GITHUB_WORKSPACE/.github/scripts/common.sh
+          source $GITHUB_WORKSPACE/scripts/common.sh
           step_start "整理 ${{ matrix.branch }}-${{ matrix.config }} 产出物"
           
           local source_dir="/workdir/${{ matrix.branch }}/bin/targets/${{ env.CHIPSET }}"
@@ -331,7 +320,7 @@ jobs:
 
       - name: 整合与打包
         run: |
-          source $GITHUB_WORKSPACE/.github/scripts/common.sh
+          source $GITHUB_WORKSPACE/scripts/common.sh
           step_start "整合与打包所有产出物"
           
           local release_dir="/tmp/release"
@@ -353,7 +342,7 @@ jobs:
       - name: 生成 Release Body
         id: generate_body
         run: |
-          source $GITHUB_WORKSPACE/.github/scripts/common.sh
+          source $GITHUB_WORKSPACE/scripts/common.sh
           step_start "生成 Release Body"
           
           local tag="${{ env.CHIPSET }}-$(date +'%Y%m%d')"
