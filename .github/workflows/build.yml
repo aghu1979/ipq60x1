@@ -55,6 +55,7 @@ jobs:
       device_list: ${{ steps.setup.outputs.device_list }}
       base_configs_json: ${{ steps.setup.outputs.base_configs_json }}
       user_configs_json: ${{ steps.setup.outputs.user_configs_json }}
+      device_list_json: ${{ steps.setup.outputs.device_list_json }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -83,9 +84,11 @@ jobs:
           USER_CONFIGS_JSON=$(echo "$USER_CONFIGS" | sed 's/[^ ]* */"&"/g' | sed 's/ /,/g' | sed 's/^/[/g' | sed 's/$/]/g')
           echo "user_configs_json=$USER_CONFIGS_JSON" >> $GITHUB_OUTPUT
           
-          # 从基础配置中提取设备列表
+          # 从基础配置中提取设备列表并转换为JSON格式
           DEVICE_LIST=$(grep -o 'CONFIG_TARGET_DEVICE_.*_DEVICE_.*=y' configs/base_${TARGET_ARCH}.config 2>/dev/null | sed 's/CONFIG_TARGET_DEVICE_.*_DEVICE_//g' | sed 's/=y//g' | tr '\n' ' ')
+          DEVICE_LIST_JSON=$(echo "$DEVICE_LIST" | sed 's/[^ ]* */"&"/g' | sed 's/ /,/g' | sed 's/^/[/g' | sed 's/$/]/g')
           echo "device_list=$DEVICE_LIST" >> $GITHUB_OUTPUT
+          echo "device_list_json=$DEVICE_LIST_JSON" >> $GITHUB_OUTPUT
           
           # 输出摘要信息
           echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 目标架构: $TARGET_ARCH${{ env.COLOR_RESET }}"
@@ -97,6 +100,7 @@ jobs:
           # 输出JSON格式
           echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 基础配置JSON: $BASE_CONFIGS_JSON${{ env.COLOR_RESET }}"
           echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 用户配置JSON: $USER_CONFIGS_JSON${{ env.COLOR_RESET }}"
+          echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 设备列表JSON: $DEVICE_LIST_JSON${{ env.COLOR_RESET }}"
           
           # 输出结束信息
           echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 环境设置完成${{ env.COLOR_RESET }}"
@@ -243,7 +247,7 @@ jobs:
       matrix:
         base_config: ${{ fromJson(needs.setup.outputs.base_configs_json) }}
         user_config: ${{ fromJson(needs.setup.outputs.user_configs_json) }}
-        device: ${{ fromJson('["' && replace(needs.setup.outputs.device_list, ' ', '","') && '"]') }}
+        device: ${{ fromJson(needs.setup.outputs.device_list_json) }}
       fail-fast: false
     steps:
       - name: Checkout
