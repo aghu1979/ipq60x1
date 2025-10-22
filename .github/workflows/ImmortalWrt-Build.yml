@@ -1,6 +1,6 @@
 name: ImmortalWrt 分层编译系统
 
-# 触发条件：定时任务（每周五0点北京时间）和手动触发
+# 触发条件：定时任务（每周五0点北京时间）、手动触发和代码推送
 on:
   schedule:
     # 北京时间每周五0点 = UTC每周四16点
@@ -20,6 +20,18 @@ on:
         required: false
         default: false
         type: boolean
+  push:
+    branches: [ master, main ]
+    paths:
+      - '.github/configs/**'
+      - '.github/scripts/**'
+      - '.github/workflows/ImmortalWrt-Build.yml'
+  pull_request:
+    branches: [ master, main ]
+    paths:
+      - '.github/configs/**'
+      - '.github/scripts/**'
+      - '.github/workflows/ImmortalWrt-Build.yml'
 
 # 全局环境变量
 env:
@@ -74,22 +86,52 @@ jobs:
       - name: 📊 显示初始磁盘空间
         id: disk-space-init
         run: |
+          # 设置严格模式，但允许某些命令失败
+          set +e
+          
           echo "## 📊 初始磁盘空间" >> $GITHUB_STEP_SUMMARY
           df -h | tee -a $GITHUB_STEP_SUMMARY
           
           # 创建必要的目录
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "📁 创建工作目录..." >> $GITHUB_STEP_SUMMARY
           mkdir -p ${{ env.LOG_DIR }}
           mkdir -p ${{ env.CACHE_DIR }}
-          echo "✓ 创建日志目录: ${{ env.LOG_DIR }}" >> $GITHUB_STEP_SUMMARY
-          echo "✓ 创建缓存目录: ${{ env.CACHE_DIR }}" >> $GITHUB_STEP_SUMMARY
+          
+          # 检查目录创建是否成功
+          if [ -d "${{ env.LOG_DIR }}" ]; then
+              echo "✓ 创建日志目录: ${{ env.LOG_DIR }}" >> $GITHUB_STEP_SUMMARY
+          else
+              echo "❌ 创建日志目录失败" >> $GITHUB_STEP_SUMMARY
+              exit 1
+          fi
+          
+          if [ -d "${{ env.CACHE_DIR }}" ]; then
+              echo "✓ 创建缓存目录: ${{ env.CACHE_DIR }}" >> $GITHUB_STEP_SUMMARY
+          else
+              echo "❌ 创建缓存目录失败" >> $GITHUB_STEP_SUMMARY
+              exit 1
+          fi
           
           # 验证配置文件存在
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "🔍 验证配置文件..." >> $GITHUB_STEP_SUMMARY
+          
+          # 列出configs目录内容（用于调试）
+          echo "### configs目录内容：" >> $GITHUB_STEP_SUMMARY
+          if [ -d ".github/configs" ]; then
+              ls -la .github/configs/ >> $GITHUB_STEP_SUMMARY
+          else
+              echo "❌ .github/configs 目录不存在" >> $GITHUB_STEP_SUMMARY
+              exit 1
+          fi
+          
+          # 检查具体配置文件
           if [ -f ".github/configs/base_ipq60xx.config" ]; then
               echo "✓ 找到 base_ipq60xx.config" >> $GITHUB_STEP_SUMMARY
           else
               echo "❌ 未找到 base_ipq60xx.config" >> $GITHUB_STEP_SUMMARY
+              echo "请检查文件路径是否正确" >> $GITHUB_STEP_SUMMARY
               exit 1
           fi
           
@@ -97,8 +139,12 @@ jobs:
               echo "✓ 找到 base_immwrt.config" >> $GITHUB_STEP_SUMMARY
           else
               echo "❌ 未找到 base_immwrt.config" >> $GITHUB_STEP_SUMMARY
+              echo "请检查文件路径是否正确" >> $GITHUB_STEP_SUMMARY
               exit 1
           fi
+          
+          # 恢复严格模式
+          set -e
 
       - name: 🐧 安装依赖
         id: install-deps
@@ -844,6 +890,8 @@ jobs:
       - name: 📦 收集编译产物
         id: collect-artifacts
         run: |
+          set -e  # 严格错误退出
+          
           cd openwrt
           
           echo "## 📦 收集编译产物 (${{ matrix.config }})" >> $GITHUB_STEP_SUMMARY
@@ -956,29 +1004,55 @@ jobs:
           # 创建发布目录
           mkdir -p release/
           
+          # 检查artifacts目录
+          echo "### 📋 检查artifacts目录" >> $GITHUB_STEP_SUMMARY
+          if [ -d "artifacts" ]; then
+              echo "✓ artifacts目录存在" >> $GITHUB_STEP_SUMMARY
+              echo "目录内容：" >> $GITHUB_STEP_SUMMARY
+              find artifacts/ -type d | sort >> $GITHUB_STEP_SUMMARY
+          else
+              echo "❌ artifacts目录不存在" >> $GITHUB_STEP_SUMMARY
+              exit 1
+          fi
+          
           # 合并所有配置文件
           echo "### 📄 整理配置文件" >> $GITHUB_STEP_SUMMARY
+          CONFIG_COUNT=0
           find artifacts/ -name "*.config" -type f | while read config; do
               cp "$config" release/
+              CONFIG_COUNT=$((CONFIG_COUNT + 1))
+              echo "- $(basename $config)" >> $GITHUB_STEP_SUMMARY
           done
           
-          # 打包所有配置文件
+          # 打包所有配置文件（如果存在）
           cd release/
-          tar -czf "ipq60xx-config.tar.gz" *.config
-          rm -f *.config
+          if ls *.config >/dev/null 2>&1; then
+              tar -czf "ipq60xx-config.tar.gz" *.config
+              echo "✓ 配置文件打包完成" >> $GITHUB_STEP_SUMMARY
+              rm -f *.config
+          else
+              echo "⚠️ 没有找到配置文件" >> $GITHUB_STEP_SUMMARY
+          fi
           cd ..
           
           # 合并所有软件包（允许覆盖）
           echo "### 📦 合并软件包" >> $GITHUB_STEP_SUMMARY
           mkdir -p release/packages/
+          PACKAGE_COUNT=0
           find artifacts/ -name "*.ipk" -o -name "*.apk" | while read pkg; do
               cp "$pkg" release/packages/ 2>/dev/null || true
+              PACKAGE_COUNT=$((PACKAGE_COUNT + 1))
           done
           
-          # 打包所有软件包
+          # 打包所有软件包（如果存在）
           cd release/
-          tar -czf "ipq60xx-app.tar.gz" packages/
-          rm -rf packages/
+          if [ -d "packages" ] && [ "$(ls -A packages)" ]; then
+              tar -czf "ipq60xx-app.tar.gz" packages/
+              echo "✓ 软件包打包完成" >> $GITHUB_STEP_SUMMARY
+              rm -rf packages/
+          else
+              echo "⚠️ 没有找到软件包" >> $GITHUB_STEP_SUMMARY
+          fi
           cd ..
           
           # 复制所有固件
@@ -990,13 +1064,22 @@ jobs:
               echo "- $(basename $bin)" >> $GITHUB_STEP_SUMMARY
           done
           
-          # 生成软件包列表
-          echo "### 📋 生成的luci-app列表:" >> $GITHUB_STEP_SUMMARY
-          tar -tzf release/ipq60xx-app.tar.gz | grep "luci-app-" | \
-              sed 's/.*\///g' | sed 's/\.ipk$//' | sed 's/\.apk$//' | \
-              sort | while read app; do
-                  echo "- $app" >> $GITHUB_STEP_SUMMARY
-          done
+          # 生成软件包列表（如果存在）
+          if [ -f "release/ipq60xx-app.tar.gz" ]; then
+              echo "### 📋 生成的luci-app列表:" >> $GITHUB_STEP_SUMMARY
+              tar -tzf release/ipq60xx-app.tar.gz | grep "luci-app-" | \
+                  sed 's/.*\///g' | sed 's/\.ipk$//' | sed 's/\.apk$//' | \
+                  sort | while read app; do
+                      echo "- $app" >> $GITHUB_STEP_SUMMARY
+              done
+          fi
+          
+          # 显示最终统计
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 发布文件统计" >> $GITHUB_STEP_SUMMARY
+          echo "- 固件文件数: $(find release/ -name "*.bin" -type f | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo "- 配置包: $(test -f release/ipq60xx-config.tar.gz && echo "存在" || echo "不存在")" >> $GITHUB_STEP_SUMMARY
+          echo "- 软件包: $(test -f release/ipq60xx-app.tar.gz && echo "存在" || echo "不存在")" >> $GITHUB_STEP_SUMMARY
           
           echo "✓ 发布文件整理完成" >> $GITHUB_STEP_SUMMARY
 
@@ -1069,14 +1152,16 @@ jobs:
               echo "- $device" >> release/NOTES.md
           done
           
-          # 添加luci应用列表
-          echo "" >> release/NOTES.md
-          echo "## 📋 完整的luci应用列表" >> release/NOTES.md
-          tar -tzf release/ipq60xx-app.tar.gz | grep "luci-app-" | \
-              sed 's/.*\///g' | sed 's/\.ipk$//' | sed 's/\.apk$//' | \
-              sort | while read app; do
-                  echo "- $app" >> release/NOTES.md
-          done
+          # 添加luci应用列表（如果存在）
+          if [ -f "release/ipq60xx-app.tar.gz" ]; then
+              echo "" >> release/NOTES.md
+              echo "## 📋 完整的luci应用列表" >> release/NOTES.md
+              tar -tzf release/ipq60xx-app.tar.gz | grep "luci-app-" | \
+                  sed 's/.*\///g' | sed 's/\.ipk$//' | sed 's/\.apk$//' | \
+                  sort | while read app; do
+                      echo "- $app" >> release/NOTES.md
+              done
+          fi
           
           echo "✓ Release说明生成完成" >> $GITHUB_STEP_SUMMARY
 
@@ -1104,5 +1189,5 @@ jobs:
           echo "### 📦 发布统计" >> $GITHUB_STEP_SUMMARY
           echo "- Release标签: ipq60xx-${{ needs.setup-and-base-build.outputs.build-date }}" >> $GITHUB_STEP_SUMMARY
           echo "- 固件文件数: $(ls release/*.bin 2>/dev/null | wc -l)" >> $GITHUB_STEP_SUMMARY
-          echo "- 配置包: ipq60xx-config.tar.gz" >> $GITHUB_STEP_SUMMARY
-          echo "- 软件包: ipq60xx-app.tar.gz" >> $GITHUB_STEP_SUMMARY
+          echo "- 配置包: $(test -f release/ipq60xx-config.tar.gz && echo "存在" || echo "不存在")" >> $GITHUB_STEP_SUMMARY
+          echo "- 软件包: $(test -f release/ipq60xx-app.tar.gz && echo "存在" || echo "不存在")" >> $GITHUB_STEP_SUMMARY
