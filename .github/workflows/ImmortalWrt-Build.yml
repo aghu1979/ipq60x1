@@ -1,0 +1,413 @@
+name: ImmortalWrt 分层编译系统
+
+# 触发条件：定时任务（每周五0点北京时间）和手动触发
+on:
+  schedule:
+    # 北京时间每周五0点 = UTC每周四16点
+    - cron: '0 16 * * 4'
+  workflow_dispatch:
+    inputs:
+      ubuntu_version:
+        description: '选择Ubuntu版本'
+        required: true
+        default: '22.04'
+        type: choice
+        options:
+          - '22.04'
+          - '24.04'
+      force_rebuild:
+        description: '强制重新编译（忽略缓存）'
+        required: false
+        default: false
+        type: boolean
+
+# 全局环境变量
+env:
+  REPO_URL: https://github.com/laipeng668/immortalwrt.git
+  REPO_BRANCH: master
+  REPO_SHORT: immwrt
+  FEEDS_CONF: feeds.conf.default
+  CONFIG_FILE: .config
+  DIY_P1_SH: scripts/diy.sh
+  DIY_P2_SH: scripts/repo.sh
+  UPLOAD_BIN_DIR: false
+  UPLOAD_FIRMWARE: true
+  UPLOAD_COWTRANSFER: false
+  UPLOAD_WETRANSFER: false
+  UPLOAD_RELEASE: true
+  TZ: Asia/Shanghai
+  AUTHOR_NAME: Mary
+  DEFAULT_IP: 192.168.111.1
+  DEFAULT_PASSWORD: none
+  DEFAULT_WIFI_PASSWORD: 12345678
+
+jobs:
+  # 第一阶段：环境准备和基础环境编译
+  setup-and-base-build:
+    name: 🚀 环境准备与基础编译
+    runs-on: ubuntu-${{ github.event.inputs.ubuntu_version || '22.04' }}
+    outputs:
+      cache-key: ${{ steps.cache-key.outputs.key }}
+      device-list: ${{ steps.parse-devices.outputs.devices }}
+      kernel-version: ${{ steps.get-kernel.outputs.version }}
+      build-date: ${{ steps.get-date.outputs.date }}
+      cache-hit: ${{ steps.cache-base.outputs.cache-hit }}
+      
+    steps:
+      - name: 🧹 清理磁盘空间
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 📊 显示初始磁盘空间
+        run: |
+          echo "## 📊 初始磁盘空间" >> $GITHUB_STEP_SUMMARY
+          df -h | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: 🐧 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses5-dev \
+            libssl-dev python3-distutils python3-pyelftools \
+            python3-setuptools python3-serial rsync unzip \
+            zlib1g-dev file wget ccache curl device-tree-compiler \
+            python3-pip python3-wheel qemu-utils
+          sudo pip3 install --upgrade pip
+          sudo pip3 install pyelftools
+
+      - name: 📅 获取构建日期
+        id: get-date
+        run: |
+          echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+          echo "## 📅 构建日期: $(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_STEP_SUMMARY
+
+      - name: 🔑 生成缓存键
+        id: cache-key
+        run: |
+          # 生成包含所有相关输入的哈希值
+          HASH_CONTENT="${{ env.REPO_URL }}-${{ env.REPO_BRANCH }}-$(cat .github/configs/base_ipq60xx.config .github/configs/base_immwrt.config | sha256sum | cut -d' ' -f1)"
+          CACHE_KEY="base-${HASH_CONTENT:0:16}"
+          echo "key=${CACHE_KEY}" >> $GITHUB_OUTPUT
+          echo "## 🔑 缓存键: ${CACHE_KEY}" >> $GITHUB_STEP_SUMMARY
+
+      - name: 📦 检出基础环境缓存
+        id: cache-base
+        uses: actions/cache@v4
+        with:
+          path: |
+            openwrt/
+            !openwrt/bin/
+            !openwrt/logs/
+            !openwrt/tmp/
+          key: ${{ steps.cache-key.outputs.key }}
+          restore-keys: |
+            base-
+
+      - name: 📥 克隆源码（缓存未命中时）
+        if: steps.cache-base.outputs.cache-hit != 'true'
+        run: |
+          echo "## 📥 缓存未命中，开始克隆源码" >> $GITHUB_STEP_SUMMARY
+          git clone ${{ env.REPO_URL }} -b ${{ env.REPO_BRANCH }} openwrt
+          cd openwrt
+          
+          # 应用基础配置
+          echo "## 🔧 应用芯片基础配置" >> $GITHUB_STEP_SUMMARY
+          cat ../.github/configs/base_ipq60xx.config >> .config
+          
+          echo "## 🔧 应用分支基础配置" >> $GITHUB_STEP_SUMMARY
+          cat ../.github/configs/base_immwrt.config >> .config
+          
+          # 更新feeds
+          echo "## 📦 更新feeds" >> $GITHUB_STEP_SUMMARY
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          
+          # 准备基础编译环境
+          echo "## 🏗️ 准备基础编译环境" >> $GITHUB_STEP_SUMMARY
+          make defconfig
+          make download -j8
+          make tools/compile -j$(nproc)
+          make toolchain/compile -j$(nproc)
+
+      - name: 🔍 解析设备列表
+        id: parse-devices
+        run: |
+          cd openwrt
+          # 从配置文件中提取设备名称
+          DEVICES=$(grep "CONFIG_TARGET_DEVICE.*=y" .config | sed 's/.*DEVICE_\(.*\)=y/\1/' | tr '\n' ' ')
+          echo "devices=${DEVICES}" >> $GITHUB_OUTPUT
+          echo "## 📱 检测到的设备: ${DEVICES}" >> $GITHUB_STEP_SUMMARY
+
+      - name: 🐧 获取内核版本
+        id: get-kernel
+        run: |
+          cd openwrt
+          if [ -f include/kernel-version.mk ]; then
+            KERNEL_VERSION=$(grep "KERNEL_VERSION" include/kernel-version.mk | cut -d'=' -f2 | tr -d ' ')
+          else
+            KERNEL_VERSION="unknown"
+          fi
+          echo "version=${KERNEL_VERSION}" >> $GITHUB_OUTPUT
+          echo "## 🐧 内核版本: ${KERNEL_VERSION}" >> $GITHUB_STEP_SUMMARY
+
+      - name: 📊 显示准备后磁盘空间
+        run: |
+          echo "## 📊 准备后磁盘空间" >> $GITHUB_STEP_SUMMARY
+          df -h | tee -a $GITHUB_STEP_SUMMARY
+
+  # 第二阶段：并行编译不同配置的固件
+  build-firmware:
+    name: 🏗️ 编译固件 (${{ matrix.config }})
+    needs: setup-and-base-build
+    runs-on: ubuntu-${{ github.event.inputs.ubuntu_version || '22.04' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Pro, Max, Ultra]
+    
+    steps:
+      - name: 🧹 清理磁盘空间
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+
+      - name: 📦 恢复基础环境缓存
+        uses: actions/cache@v4
+        with:
+          path: |
+            openwrt/
+            !openwrt/bin/
+            !openwrt/logs/
+            !openwrt/tmp/
+          key: ${{ needs.setup-and-base-build.outputs.cache-key }}
+
+      - name: 🔧 应用用户配置
+        run: |
+          cd openwrt
+          
+          # 备份原始配置
+          cp .config .config.base
+          
+          # 应用用户配置
+          if [ -f "../.github/configs/${{ matrix.config }}.config" ]; then
+            echo "## 🔧 应用 ${{ matrix.config }} 配置" >> $GITHUB_STEP_SUMMARY
+            cat "../.github/configs/${{ matrix.config }}.config" >> .config
+          else
+            echo "## ❌ 未找到 ${{ matrix.config }}.config 配置文件" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          
+          # 重新生成配置
+          make defconfig
+          
+          # 分析luci软件包变化
+          echo "## 📦 Luci软件包分析 (${{ matrix.config }})" >> $GITHUB_STEP_SUMMARY
+          echo "### 合并前luci软件包:" >> $GITHUB_STEP_SUMMARY
+          grep "CONFIG_PACKAGE_luci-.*=y" .config.base | wc -l | tee -a $GITHUB_STEP_SUMMARY
+          echo "### 合并后luci软件包:" >> $GITHUB_STEP_SUMMARY
+          grep "CONFIG_PACKAGE_luci-.*=y" .config | wc -l | tee -a $GITHUB_STEP_SUMMARY
+          
+          # 显示新增的luci软件包
+          echo "### 新增的luci软件包:" >> $GITHUB_STEP_SUMMARY
+          comm -13 <(grep "CONFIG_PACKAGE_luci-.*=y" .config.base | sort) \
+                   <(grep "CONFIG_PACKAGE_luci-.*=y" .config | sort) | \
+            sed 's/.*CONFIG_PACKAGE_\(.*\)=y/- \1/' | tee -a $GITHUB_STEP_SUMMARY || true
+
+      - name: 🏗️ 编译固件
+        run: |
+          cd openwrt
+          
+          # 设置编译参数
+          echo "## ⚙️ 编译参数设置" >> $GITHUB_STEP_SUMMARY
+          echo "- 并行数: $(nproc)" >> $GITHUB_STEP_SUMMARY
+          echo "- 配置: ${{ matrix.config }}" >> $GITHUB_STEP_SUMMARY
+          
+          # 开始编译
+          echo "## 🏗️ 开始编译固件 (${{ matrix.config }})" >> $GITHUB_STEP_SUMMARY
+          make -j$(nproc) 2>&1 | tee compile.log
+          
+          # 检查编译结果
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            echo "## ❌ 编译失败！" >> $GITHUB_STEP_SUMMARY
+            echo "### 错误日志（最后1000行）:" >> $GITHUB_STEP_SUMMARY
+            tail -1000 compile.log >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          
+          echo "## ✅ 编译完成 (${{ matrix.config }})" >> $GITHUB_STEP_SUMMARY
+
+      - name: 📦 收集编译产物
+        run: |
+          cd openwrt
+          
+          # 创建临时目录
+          TEMP_DIR="../temp_${{ matrix.config }}"
+          mkdir -p "${TEMP_DIR}"
+          
+          # 复制固件文件
+          echo "## 📦 收集固件文件" >> $GITHUB_STEP_SUMMARY
+          find bin/targets/ -name "*squashfs-*" -type f | while read file; do
+            # 提取设备名称
+            DEVICE=$(echo "$file" | grep -oE "DEVICE_[^/]+" | sed 's/DEVICE_//' || echo "unknown")
+            
+            # 根据文件类型重命名
+            if [[ "$file" == *"factory"* ]]; then
+              NEW_NAME="${{ env.REPO_SHORT }}-${DEVICE}-factory-${{ matrix.config }}.bin"
+            elif [[ "$file" == *"sysupgrade"* ]]; then
+              NEW_NAME="${{ env.REPO_SHORT }}-${DEVICE}-sysupgrade-${{ matrix.config }}.bin"
+            fi
+            
+            cp "$file" "${TEMP_DIR}/${NEW_NAME}"
+            echo "- ${NEW_NAME}" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          # 复制配置文件
+          echo "## 📄 收集配置文件" >> $GITHUB_STEP_SUMMARY
+          for device in ${{ needs.setup-and-base-build.outputs.device-list }}; do
+            cp .config "${TEMP_DIR}/${{ env.REPO_SHORT }}-${device}-${{ matrix.config }}.config"
+            cp bin/targets/*/*/manifest "${TEMP_DIR}/${{ env.REPO_SHORT }}-${device}-${{ matrix.config }}.manifest" 2>/dev/null || true
+            cp config.buildinfo "${TEMP_DIR}/${{ env.REPO_SHORT }}-${device}-${{ matrix.config }}.config.buildinfo" 2>/dev/null || true
+          done
+          
+          # 收集软件包
+          echo "## 📦 收集软件包" >> $GITHUB_STEP_SUMMARY
+          mkdir -p "${TEMP_DIR}/packages"
+          find bin/packages/ -name "*.ipk" -o -name "*.apk" 2>/dev/null | while read pkg; do
+            cp "$pkg" "${TEMP_DIR}/packages/"
+          done
+          
+          # 打包软件包
+          cd "${TEMP_DIR}"
+          tar -czf "ipq60xx-app-${{ matrix.config }}.tar.gz" packages/
+          
+          # 打包配置文件
+          tar -czf "ipq60xx-config-${{ matrix.config }}.tar.gz" *.config *.manifest *.config.buildinfo 2>/dev/null || true
+
+      - name: 📤 上传编译产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.config }}
+          path: temp_${{ matrix.config }}/
+          retention-days: 7
+
+  # 第三阶段：发布到Release
+  release:
+    name: 🚀 发布Release
+    needs: [setup-and-base-build, build-firmware]
+    runs-on: ubuntu-22.04
+    if: always() && (needs.build-firmware.result == 'success' || needs.build-firmware.result == 'skipped')
+    
+    steps:
+      - name: 📥 下载所有编译产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: 📦 整理发布文件
+        run: |
+          mkdir -p release/
+          
+          # 合并所有配置文件
+          echo "## 📦 整理配置文件" >> $GITHUB_STEP_SUMMARY
+          cat artifacts/firmware-*/ipq60xx-config-*.tar.gz | tar -xz -C release/ 2>/dev/null || true
+          
+          # 合并所有软件包
+          echo "## 📦 合并软件包" >> $GITHUB_STEP_SUMMARY
+          mkdir -p release/packages/
+          find artifacts/ -name "*.ipk" -o -name "*.apk" | while read pkg; do
+            cp "$pkg" release/packages/
+          done
+          cd release/
+          tar -czf "ipq60xx-app.tar.gz" packages/
+          
+          # 复制所有固件
+          echo "## 📦 收集固件文件" >> $GITHUB_STEP_SUMMARY
+          find artifacts/ -name "*.bin" -type f | while read bin; do
+            cp "$bin" release/
+            echo "- $(basename $bin)" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          # 生成软件包列表
+          echo "## 📋 生成的luci-app列表:" >> $GITHUB_STEP_SUMMARY
+          find packages/ -name "luci-app-*.ipk" -o -name "luci-app-*.apk" | \
+            sed 's/.*\///g' | sed 's/\.ipk$//' | sed 's/\.apk$//' | \
+            sort | while read app; do
+              echo "- $app" >> $GITHUB_STEP_SUMMARY
+            done
+
+      - name: 📝 生成Release说明
+        run: |
+          cat > release/NOTES.md << EOF
+          # ImmortalWrt 固件发布
+          
+          ## 📋 基本信息
+          - **默认管理地址**: ${{ env.DEFAULT_IP }}
+          - **默认用户**: root
+          - **默认密码**: ${{ env.DEFAULT_PASSWORD }}
+          - **默认WIFI密码**: ${{ env.DEFAULT_WIFI_PASSWORD }}
+          
+          ## 🏗️ 构建信息
+          - **分支**: ${{ env.REPO_SHORT }}
+          - **内核版本**: ${{ needs.setup-and-base-build.outputs.kernel-version }}
+          - **构建日期**: ${{ needs.setup-and-base-build.outputs.build-date }}
+          - **作者**: ${{ env.AUTHOR_NAME }}
+          
+          ## 📱 支持的设备
+          ${{ needs.setup-and-base-build.outputs.device-list }}
+          
+          ## 📦 配置版本
+          - Pro: 基础配置
+          - Max: 增强配置
+          - Ultra: 完整配置
+          
+          ## 📋 包含的luci应用
+          $(find release/packages/ -name "luci-app-*.ipk" -o -name "luci-app-*.apk" | sed 's/.*\///g' | sed 's/\.ipk$//' | sed 's/\.apk$//' | sed 's/^/- /' | sort)
+          
+          ## ⚠️ 注意事项
+          1. 刷机前请备份原配置
+          2. 首次刷机建议使用factory固件
+          3. 升级请使用sysupgrade固件
+          4. 刷机后需恢复出厂设置
+          
+          ---
+          构建时间: $(date +'%Y-%m-%d %H:%M:%S')
+          EOF
+
+      - name: 🚀 发布到GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ipq60xx-${{ needs.setup-and-base-build.outputs.build-date }}
+          name: ImmortalWrt ipq60xx ${{ needs.setup-and-base-build.outputs.build-date }}
+          body_path: release/NOTES.md
+          files: |
+            release/*.bin
+            release/*.tar.gz
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 📊 显示最终磁盘空间
+        run: |
+          echo "## 📊 最终磁盘空间" >> $GITHUB_STEP_SUMMARY
+          df -h | tee -a $GITHUB_STEP_SUMMARY
