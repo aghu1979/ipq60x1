@@ -5,7 +5,9 @@ name: Multi-Config OpenWrt Build
 
 # ===============================================================
 # 触发器：定义何时运行此工作流
-# workflow_dispatch: 允许我们手动在 GitHub 网页上触发运行
+# 1. workflow_dispatch: 手动触发
+# 2. push: 代码推送到 main 分支时触发（仅当特定文件变更）
+# 3. schedule: 定时触发 (UTC 时间周四 16:00 = 北京时间周五 00:00)
 # ===============================================================
 on:
   workflow_dispatch:
@@ -25,10 +27,22 @@ on:
         default: 'Pro'
         type: choice
         options:
-          - All      # 您可以放心地将 'All' 放在首位
+          - All
           - Pro
           - Max
           - Ultra
+  
+  push:
+    branches:
+      - main # 假设您的主分支是 main，如果不是请修改
+    paths:
+      - '.github/configs/**' # 只有配置文件变更时才触发
+      - '.github/scripts/**' # 只有脚本变更时才触发
+      - '.github/workflows/build.yml' # 工作流本身变更时也触发
+
+  schedule:
+    # cron 表达式，UTC 时间。'0 16 * * 4' 表示每周四 16:00 (北京时间周五 00:00)
+    - cron: '0 16 * * 4'
 
 # ===============================================================
 # 全局环境变量：这些变量可以在所有 Job 和所有 Step 中引用
@@ -41,39 +55,44 @@ env:
 
 # ===============================================================
 # Jobs: 定义要执行的任务列表
-# 我们将定义两个 Job:
-# 1. setup-matrix: 准备编译矩阵
-# 2. build: 执行编译
 # ===============================================================
 jobs:
   # -----------------------------------------------------------------
   # Job 1: setup-matrix
-  # 作用：根据用户的手动输入，动态生成一个编译矩阵，并传递给下一个 Job
+  # 作用：根据触发方式和用户输入，动态生成一个编译矩阵
   # -----------------------------------------------------------------
   setup-matrix:
     name: 准备编译矩阵
-    runs-on: ubuntu-latest # 运行在最新的 Ubuntu 虚拟机上
+    runs-on: ubuntu-latest
 
-    # 定义此 Job 的输出，这些输出可以被其他 Job 引用
     outputs:
-      # 输出一个名为 'matrix' 的变量，其值来自下面步骤的输出
       matrix: ${{ steps.set-matrix.outputs.matrix }}
 
     steps:
       - name: 生成编译矩阵
-        id: set-matrix # 为此步骤设置一个 ID，方便后面引用其输出
+        id: set-matrix
         run: |
-          # 【关键修正】为了避免多行字符串在 YAML 中可能引入的格式问题，我们将 JSON 压缩到一行。
-          # 这能确保传递给 `jq` 的是一个纯净、无误的 JSON 字符串。
+          # 定义所有可能的编译组合 (单行 JSON，确保格式纯净)
           ALL_COMBITIONS='[{"branch": "immwrt", "config": "Pro", "repo_url": "https://github.com/laipeng668/immortalwrt.git", "repo_branch": "master", "repo_short": "immwrt"}, {"branch": "immwrt", "config": "Max", "repo_url": "https://github.com/laipeng668/immortalwrt.git", "repo_branch": "master", "repo_short": "immwrt"}, {"branch": "immwrt", "config": "Ultra", "repo_url": "https://github.com/laipeng668/immortalwrt.git", "repo_branch": "master", "repo_short": "immwrt"}]'
 
-          # 2. 获取用户的手动输入
-          INPUT_BRANCH="${{ github.event.inputs.branch }}"
-          INPUT_CONFIG="${{ github.event.inputs.config }}"
+          # 判断触发方式，并设置默认的分支和配置
+          # 如果是手动触发，则使用用户选择的值
+          # 如果是 push 或 schedule 触发，则使用默认值
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            INPUT_BRANCH="${{ github.event.inputs.branch }}"
+            INPUT_CONFIG="${{ github.event.inputs.config }}"
+          else
+            # 自动触发时的默认行为：编译 immwrt 分支的所有配置
+            INPUT_BRANCH="immwrt"
+            INPUT_CONFIG="All"
+          fi
+          
+          echo "Triggered by: ${{ github.event_name }}"
+          echo "Selected branch: $INPUT_BRANCH"
+          echo "Selected config: $INPUT_CONFIG"
 
-          # 3. 使用 `jq` 根据用户输入过滤 JSON
-          #    `select()` 函数用于筛选符合条件的对象
-          FINAL_MATRIX=$(echo "$ALL_COMBITIONS" | jq --arg branch "$INPUT_BRANCH" --arg config "$INPUT_CONFIG" '
+          # 【关键修正】使用 `jq -c` 生成压缩的单行 JSON，避免 GITHUB_OUTPUT 格式错误
+          FINAL_MATRIX=$(echo "$ALL_COMBITIONS" | jq -c --arg branch "$INPUT_BRANCH" --arg config "$INPUT_CONFIG" '
             [
               .[] | 
               select(
@@ -83,8 +102,7 @@ jobs:
             ]
           ')
 
-          # 4. 将最终的 JSON 矩阵输出，以便下一个 Job 使用
-          #    $GITHUB_OUTPUT 是一个特殊的文件，写入它的内容会成为 Job 的输出
+          # 将最终的 JSON 矩阵输出
           echo "Generated matrix for build job: $FINAL_MATRIX"
           echo "matrix=$FINAL_MATRIX" >> $GITHUB_OUTPUT
 
@@ -93,21 +111,13 @@ jobs:
   # 作用：执行实际的固件编译任务
   # -----------------------------------------------------------------
   build:
-    # name: 使用矩阵变量来动态命名 Job，方便在 Actions 页面识别
     name: 编译 ${{ matrix.repo_short }} (${{ matrix.config }})
-    
-    # needs: 声明此 Job 依赖于 setup-matrix Job 的成功完成
     needs: setup-matrix
-    
-    # 如果 setup-matrix 输出的矩阵为空，则跳过此 Job
     if: fromJson(needs.setup-matrix.outputs.matrix)[0] != null
-
     runs-on: ubuntu-22.04
 
-    # strategy: 定义矩阵策略
-    # matrix: 矩阵的内容直接从 setup-matrix Job 的输出中解析而来
     strategy:
-      fail-fast: false # 一个配置失败，其他配置继续编译
+      fail-fast: false
       matrix: ${{ fromJson(needs.setup-matrix.outputs.matrix) }}
 
     steps:
@@ -125,17 +135,14 @@ jobs:
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
 
-      # 核心：分层缓存 - 第一层 (基础环境)
       - name: 缓存基础环境
         id: cache-base
         uses: actions/cache@v4
         with:
           path: |
-            openwrt/toolchain # 交叉编译工具链
-            openwrt/dl        # 源码下载包
-          # 缓存键：根据操作系统、分支和基础配置文件的哈希值生成
+            openwrt/toolchain
+            openwrt/dl
           key: ${{ runner.os }}-base-${{ matrix.repo_short }}-${{ hashFiles('**/base_ipq60xx.config', '**/base_immwrt.config', '**/base_openwrt.config', '**/base_libwrt.config') }}
-          # 恢复键：如果精确键没命中，则尝试恢复同分支的旧缓存
           restore-keys: |
             ${{ runner.os }}-base-${{ matrix.repo_short }}-
 
@@ -155,16 +162,10 @@ jobs:
         run: |
           cd openwrt
           echo "Generating .config for ${{ matrix.config }} on ${{ matrix.repo_short }}"
-          # 1. 按顺序合并基础配置和用户配置文件
           cat $GITHUB_WORKSPACE/.github/configs/base_ipq60xx.config >> .config
           cat $GITHUB_WORKSPACE/.github/configs/base_${{ matrix.repo_short }}.config >> .config
           cat $GITHUB_WORKSPACE/.github/configs/${{ matrix.config }}.config >> .config
-          
-          # 2. 【关键】使用 defconfig 处理依赖，确保 Luci 包能被正确识别和配置
           make defconfig
-          
-          # 3. (可选) 打印最终配置用于调试
-          # cat .config
 
       - name: 下载软件包
         id: download
@@ -189,10 +190,9 @@ jobs:
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
         with:
-          # 产物名称包含分支、配置、设备名和日期，清晰明了
           name: ${{ matrix.repo_short }}_${{ matrix.config }}_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
           path: |
             openwrt/bin/targets/*/*
             !openwrt/bin/targets/*/*.manifest
             !openwrt/bin/targets/*/*.json
-          retention-days: 30 # 产物保留30天
+          retention-days: 30
