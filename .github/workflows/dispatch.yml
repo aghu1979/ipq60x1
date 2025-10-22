@@ -15,12 +15,12 @@ on:
           - ubuntu-22.04
           - ubuntu-24.04
 
+# 注意：此版本故意移除了顶层的 permissions 块进行诊断
+
 jobs:
   setup:
     name: 📋 准备工作
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     outputs:
       hashes-value: ${{ steps.generate-hashes.outputs.hashes-value }}
       devices: ${{ steps.get-devices.outputs.devices }}
@@ -87,8 +87,6 @@ jobs:
   build-firmware:
     name: 🏗️ 构建 ${{ matrix.profile }} 配置
     needs: setup
-    permissions:
-      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -109,9 +107,7 @@ jobs:
     if: always() && needs.setup.result == 'success'
     needs: [setup, build-firmware]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      releases: write
+    # 注意：此版本故意移除了 job 级别的 permissions 块
     steps:
       - name: ⬇️ 检出代码
         uses: actions/checkout@v4
@@ -139,38 +135,9 @@ jobs:
         if: needs.build-firmware.result == 'success'
         uses: softprops/action-gh-release@v2
         with:
-          # 硬编码 tag_name 和 body 中的变量
           tag_name: ipq60xx-${{ github.run_number }}-${{ github.sha }}
           body: |
-            ## 🎉 ImmortalWrt ipq60xx 固件发布
-            - **作者**: Mary
-            - **发布时间**: ${{ github.event.head_commit.timestamp }}
-            - **源码分支**: immortalwrt
-            - **编译配置**: Pro, Max, Ultra
-            - **内核版本**: ${{ needs.setup.outputs.kernel-version }}
-            
-            ---
-            
-            ## 📋 固件信息
-            - **默认管理地址**: 192.168.111.1
-            - **默认用户**: root
-            - **默认密码**: 无 (直接回车)
-            - **默认WIFI密码**: 12345678
-            
-            ---
-            
-            ## 📦 包含的 LuCI 应用列表
-            $(cat release_assets/luci_apps_list.txt)
-            
-            ---
-            
-            ## ⬇️ 下载说明
-            请根据您的设备型号和所需配置下载对应的固件文件。
-            - `immwrt-<设备名>-<factory/sysupgrade>-<Pro/Max/Ultra>.bin` 是固件文件。
-            - `ipq60xx-config.tar.gz` 包含所有配置、清单和构建信息。
-            - `ipq60xx-app.tar.gz` 包含所有编译出的软件包。
-            - `ipq60xx-log.tar.gz` 包含本次编译的详细日志。
-
+            ImmortalWrt ipq60xx 固件发布
           files: |
             release_assets/*
         env:
