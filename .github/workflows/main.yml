@@ -1,0 +1,389 @@
+name: OpenWrt Multi-Branch Multi-Config Build
+
+on:
+  # 手动触发，允许用户选择操作系统
+  workflow_dispatch:
+    inputs:
+      ubuntu_version:
+        description: '选择 Ubuntu 版本'
+        required: true
+        default: 'ubuntu-22.04'
+        type: choice
+        options:
+          - ubuntu-22.04
+          - ubuntu-24.04
+  # 定时触发，北京时间每周五0点 (UTC+8) -> UTC 16:00
+  schedule:
+    - cron: '0 16 * * 4'
+  # 推送到main分支时触发
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/**'
+      - 'configs/**'
+      - 'scripts/**'
+
+# 全局环境变量
+env:
+  CHIPSET: ipq60xx
+  LOG_FILE: build.log
+  # Release 相关信息
+  DEFAULT_IP: "192.168.111.1"
+  DEFAULT_USER: "root"
+  DEFAULT_PASS: "none"
+  DEFAULT_WIFI_PASS: "12345678"
+  AUTHOR: "Mary"
+
+jobs:
+  # Job 1: 准备基础编译环境
+  prepare-env:
+    name: 准备编译环境
+    runs-on: ${{ github.event.inputs.ubuntu_version || 'ubuntu-22.04' }}
+    outputs:
+      # 将提取的设备名和哈希文件名传递给后续job
+      device_names: ${{ steps.extract_devices.outputs.devices }}
+      hashes_file_name: ${{ steps.hash.outputs.name }}
+      # 将成功构建的分支列表传递给build job
+      built_branches: ${{ steps.set-outputs.outputs.branches }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 初始化环境
+        run: |
+          # 加载通用函数
+          source .github/scripts/common.sh
+          step_start "初始化编译环境"
+          # 清理磁盘空间
+          check_disk_space
+          # 安装依赖
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2204)
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo timedatectl set-timezone "Asia/Shanghai"
+          # 创建工作目录
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+          step_end "初始化编译环境"
+
+      - name: 提取设备名
+        id: extract_devices
+        run: |
+          source .github/scripts/common.sh
+          step_start "提取设备名"
+          local devices=$(extract_device_names ".github/configs/base_${{ env.CHIPSET }}.config")
+          echo "devices=$devices" >> $GITHUB_OUTPUT
+          step_end "提取设备名"
+
+      - name: 生成缓存哈希文件
+        id: hash
+        run: |
+          source .github/scripts/common.sh
+          step_start "生成缓存哈希文件"
+          local hash_file="hashes-${{ env.CHIPSET }}.txt"
+          generate_hashes_file "$hash_file" \
+            ".github/scripts/" \
+            ".github/configs/base_${{ env.CHIPSET }}.config"
+          echo "name=$hash_file" >> $GITHUB_OUTPUT
+          step_end "生成缓存哈希文件"
+
+      - name: 缓存 Dl 目录
+        uses: actions/cache@v4
+        with:
+          path: /workdir/dl
+          key: ${{ env.CHIPSET }}-dl-${{ hashFiles(steps.hash.outputs.name) }}
+          restore-keys: |
+            ${{ env.CHIPSET }}-dl-
+
+      - name: 缓存 Staging 和 Build 目录
+        uses: actions/cache@v4
+        with:
+          path: |
+            /workdir/staging_dir
+            /workdir/build_dir
+          key: ${{ env.CHIPSET }}-build-${{ hashFiles(steps.hash.outputs.name) }}
+          restore-keys: |
+            ${{ env.CHIPSET }}-build-
+
+      - name: 缓存 CCache
+        uses: actions/cache@v4
+        with:
+          path: /workdir/.ccache
+          key: ${{ env.CHIPSET }}-ccache-${{ hashFiles(steps.hash.outputs.name) }}
+          restore-keys: |
+            ${{ env.CHIPSET }}-ccache-
+
+      - name: 准备分支环境 (矩阵)
+        strategy:
+          fail-fast: false
+          matrix:
+            include:
+              - branch: immwrt
+                repo_url: https://github.com/laipeng668/immortalwrt.git
+                repo_branch: master
+                repo_short: immwrt
+              - branch: openwrt
+                repo_url: https://github.com/laipeng668/openwrt.git
+                repo_branch: master
+                repo_short: openwrt
+              - branch: libwrt
+                repo_url: https://github.com/laipeng668/openwrt-6.x.git
+                repo_branch: k6.12-nss
+                repo_short: libwrt
+
+        run: |
+          source .github/scripts/common.sh
+          step_start "准备 ${{ matrix.branch }} 分支环境"
+          
+          # 克隆源码
+          log_info "克隆 ${{ matrix.repo_url }}..."
+          git clone ${{ matrix.repo_url }} -b ${{ matrix.repo_branch }} --single-branch /workdir/${{ matrix.branch }}
+          
+          # 执行自定义脚本
+          log_info "执行 ${{ matrix.branch }} 的自定义脚本..."
+          cd /workdir/${{ matrix.branch }}
+          $GITHUB_WORKSPACE/.github/scripts/custom_${{ matrix.branch }}.sh
+          
+          # 更新和安装 Feeds
+          log_info "更新和安装 Feeds..."
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          
+          # 合并基础配置
+          log_info "合并基础配置文件..."
+          cat $GITHUB_WORKSPACE/.github/configs/base_${{ env.CHIPSET }}.config > .config
+          cat $GITHUB_WORKSPACE/.github/configs/base_${{ matrix.branch }}.config >> .config
+          make defconfig
+          
+          # 下载源码
+          log_info "下载所有软件包源码..."
+          make download -j$(nproc)
+          
+          step_end "准备 ${{ matrix.branch }} 分支环境"
+
+      - name: 上传环境 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: env_${{ env.CHIPSET }}
+          path: /workdir
+          retention-days: 1
+
+      - name: 设置输出
+        id: set-outputs
+        run: |
+          # 将所有分支名用逗号连接
+          echo "branches=immwrt,openwrt,libwrt" >> $GITHUB_OUTPUT
+
+  # Job 2: 矩阵编译
+  build:
+    name: 编译固件 (${{ matrix.branch }}-${{ matrix.config }})
+    needs: prepare-env
+    runs-on: ${{ github.event.inputs.ubuntu_version || 'ubuntu-22.04' }}
+    strategy:
+      fail-fast: false # 允许某个配置失败，其他继续
+      matrix:
+        branch: ${{ fromJson(format('["%s"]', needs.prepare-env.outputs.built_branches)) }}
+        config: [Pro, Max, Ultra]
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 初始化环境
+        run: |
+          source .github/scripts/common.sh
+          step_start "初始化编译环境"
+          check_disk_space
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2204)
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo timedatectl set-timezone "Asia/Shanghai"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+          step_end "初始化编译环境"
+
+      - name: 下载环境 Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: env_${{ env.CHIPSET }}
+          path: /workdir
+
+      - name: 恢复 CCache
+        uses: actions/cache@v4
+        with:
+          path: /workdir/.ccache
+          key: ${{ env.CHIPSET }}-ccache-${{ hashFiles(format('/workdir/hashes-{0}.txt', env.CHIPSET)) }}
+
+      - name: 合并最终配置并检查 LuCI 包
+        run: |
+          source .github/scripts/common.sh
+          step_start "合并最终配置并检查 LuCI 包"
+          
+          cd /workdir/${{ matrix.branch }}
+          
+          # 保存合并前的配置
+          cp .config .config.before
+          
+          # 合并用户配置
+          cat $GITHUB_WORKSPACE/.github/configs/${{ matrix.config }}.config >> .config
+          
+          # 格式化并补全配置
+          make defconfig
+          
+          # 对比 LuCI 包
+          if ! compare_luci_packages ".config.before" ".config"; then
+            log_error "LuCI 软件包检查失败，请检查配置文件！"
+            exit 1
+          fi
+          
+          step_end "合并最终配置并检查 LuCI 包"
+
+      - name: 编译固件
+        run: |
+          source .github/scripts/common.sh
+          step_start "编译 ${{ matrix.branch }}-${{ matrix.config }} 固件"
+          cd /workdir/${{ matrix.branch }}
+          export CCACHE_DIR=/workdir/.ccache
+          make -j$(nproc) || make -j1 V=s
+          step_end "编译 ${{ matrix.branch }}-${{ matrix.config }} 固件"
+
+      - name: 整理产出物
+        run: |
+          source .github/scripts/common.sh
+          step_start "整理 ${{ matrix.branch }}-${{ matrix.config }} 产出物"
+          
+          local source_dir="/workdir/${{ matrix.branch }}/bin/targets/${{ env.CHIPSET }}"
+          local target_dir="/workdir/artifacts/${{ matrix.branch }}-${{ matrix.config }}"
+          
+          rename_and_package_artifacts "$source_dir" "$target_dir" "${{ matrix.branch }}" "${{ env.CHIPSET }}" "${{ matrix.config }}" "${{ needs.prepare-env.outputs.device_names }}"
+          
+          step_end "整理 ${{ matrix.branch }}-${{ matrix.config }} 产出物"
+
+      - name: 上传产出物 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build_${{ matrix.branch }}_${{ matrix.config }}
+          path: /workdir/artifacts/${{ matrix.branch }}-${{ matrix.config }}/
+          retention-days: 1
+
+  # Job 3: 发布
+  publish:
+    name: 发布到 Release
+    needs: [prepare-env, build]
+    runs-on: ubuntu-latest
+    if: success() # 只有所有编译成功后才执行
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载所有产出物
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/artifacts
+
+      - name: 整合与打包
+        run: |
+          source .github/scripts/common.sh
+          step_start "整合与打包所有产出物"
+          
+          local release_dir="/tmp/release"
+          mkdir -p "${release_dir}"
+          
+          # 打包所有配置文件
+          find /tmp/artifacts -name "configs" -type d | xargs -I {} cp -r -n {} "${release_dir}/"
+          tar -czf "${release_dir}/${{ env.CHIPSET }}-config.tar.gz" -C "${release_dir}" configs/
+          
+          # 打包所有软件包
+          find /tmp/artifacts -name "apps" -type d | xargs -I {} cp -r -n {} "${release_dir}/"
+          tar -czf "${release_dir}/${{ env.CHIPSET }}-app.tar.gz" -C "${release_dir}" apps/
+          
+          # 移动所有固件到发布目录
+          find /tmp/artifacts -name "*.bin" -exec cp {} "${release_dir}/" \;
+          
+          step_end "整合与打包所有产出物"
+
+      - name: 生成 Release Body
+        id: generate_body
+        run: |
+          source .github/scripts/common.sh
+          step_start "生成 Release Body"
+          
+          local tag="${{ env.CHIPSET }}-$(date +'%Y%m%d')"
+          local kernel_version=$(find /tmp/artifacts -name "*.manifest" -exec grep -m1 '^kernel:' {} \; | head -n1 | cut -d' ' -f2)
+          local luci_apps=$(find /tmp/release -name "*.manifest" -exec grep -h 'luci-app-' {} \; | sort -u | tr '\n' ', ')
+          
+          cat > /tmp/release_body.md << EOF
+          ## OpenWrt 固件发布
+          
+          ---
+          
+          ### 📦 基本信息
+          - **默认管理地址**: ${{ env.DEFAULT_IP }}
+          - **默认用户**: ${{ env.DEFAULT_USER }}
+          - **默认密码**: ${{ env.DEFAULT_PASS }}
+          - **默认WIFI密码**: ${{ env.DEFAULT_WIFI_PASS }}
+          
+          ### 🌳 分支与配置
+          - **包含分支**: ImmortalWrt, OpenWrt, LibWrt
+          - **包含配置**: Pro, Max, Ultra
+          
+          ### 🔧 系统信息
+          - **内核版本**: ${kernel_version}
+          - **编译的LuCI应用列表**: ${luci_apps}
+          
+          ### 👤 发布信息
+          - **作者**: ${{ env.AUTHOR }}
+          - **发布时间**: $(date '+%Y-%m-%d %H:%M:%S %Z')
+          
+          ---
+          
+          ### 📥 下载说明
+          请根据您的 **设备型号** 和 **需求配置** 下载对应的固件文件。
+          
+          ### 📎 附件说明
+          - \`*-factory.bin\`: 适用于从原厂固件刷入。
+          - \`*-sysupgrade.bin\`: 适用于在已刷入OpenWrt的设备上升级。
+          - \`${{ env.CHIPSET }}-config.tar.gz\`: 所有固件的配置文件(.config, .manifest等)。
+          - \`${{ env.CHIPSET }}-app.tar.gz\`: 所有编译生成的软件包(.ipk)。
+          EOF
+          
+          echo "tag=$tag" >> $GITHUB_OUTPUT
+          echo "body_file=/tmp/release_body.md" >> $GITHUB_OUTPUT
+          
+          step_end "生成 Release Body"
+
+      - name: 创建并发布 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.generate_body.outputs.tag }}
+          body_path: ${{ steps.generate_body.outputs.body_file }}
+          files: |
+            /tmp/release/*.bin
+            /tmp/release/*.tar.gz
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Job 4: 清理
+  cleanup:
+    name: 清理 Artifacts
+    needs: [prepare-env, build, publish]
+    runs-on: ubuntu-latest
+    if: always() # 无论成功失败都执行
+
+    steps:
+      - name: 删除所有 Artifacts
+        uses: geekyeggo/delete-artifact@v5
+        with:
+          name: |
+            env_${{ env.CHIPSET }}
+            build_*
+          failOnError: false
