@@ -1,0 +1,531 @@
+name: OpenWrt Multi-Config Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      ubuntu_version:
+        description: '选择Ubuntu版本'
+        required: true
+        default: 'ubuntu-22.04'
+        type: choice
+        options:
+          - ubuntu-22.04
+          - ubuntu-24.04
+      target_arch:
+        description: '目标芯片架构'
+        required: true
+        default: 'ipq60xx'
+        type: choice
+        options:
+          - ipq60xx
+          - ipq80xx
+          - mtk
+  schedule:
+    # 北京时间每周五0点 (UTC时间周四16点)
+    - cron: '0 16 * * 4'
+
+env:
+  # 定义全局变量
+  TZ: Asia/Shanghai
+  REPO_URL: https://github.com/laipeng668/immortalwrt.git
+  REPO_BRANCH: master
+  # 定义颜色和图标
+  COLOR_GREEN: '\033[0;32m'
+  COLOR_RED: '\033[0;31m'
+  COLOR_YELLOW: '\033[0;33m'
+  COLOR_BLUE: '\033[0;34m'
+  COLOR_PURPLE: '\033[0;35m'
+  COLOR_CYAN: '\033[0;36m'
+  COLOR_RESET: '\033[0m'
+  ICON_START: '🚀'
+  ICON_SUCCESS: '✅'
+  ICON_ERROR: '❌'
+  ICON_WARNING: '⚠️'
+  ICON_INFO: 'ℹ️'
+  ICON_PACKAGE: '📦'
+  ICON_CONFIG: '⚙️'
+
+jobs:
+  # 准备阶段：设置基础环境
+  setup:
+    runs-on: ${{ inputs.ubuntu_version || 'ubuntu-22.04' }}
+    outputs:
+      target_arch: ${{ steps.setup.outputs.target_arch }}
+      cache_key: ${{ steps.setup.outputs.cache_key }}
+      device_list: ${{ steps.setup.outputs.device_list }}
+      base_configs: ${{ steps.setup.outputs.base_configs }}
+      user_configs: ${{ steps.setup.outputs.user_configs }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Environment
+        id: setup
+        run: |
+          # 输出开始信息
+          echo -e "${{ env.COLOR_CYAN }}${{ env.ICON_START }} 开始设置编译环境${{ env.COLOR_RESET }}"
+          
+          # 设置目标架构
+          TARGET_ARCH="${{ inputs.target_arch || 'ipq60xx' }}"
+          echo "target_arch=$TARGET_ARCH" >> $GITHUB_OUTPUT
+          
+          # 生成缓存键
+          CACHE_KEY="openwrt-${TARGET_ARCH}-$(date +%Y%m%d)"
+          echo "cache_key=$CACHE_KEY" >> $GITHUB_OUTPUT
+          
+          # 获取基础配置列表
+          BASE_CONFIGS=$(ls configs/base_*.config | xargs -n 1 basename | sed 's/.config$//' | tr '\n' ' ')
+          echo "base_configs=$BASE_CONFIGS" >> $GITHUB_OUTPUT
+          
+          # 获取用户配置列表
+          USER_CONFIGS=$(ls configs/[Pp]ro.config configs/[Mm]ax.config configs/[Uu]ltra.config 2>/dev/null | xargs -n 1 basename | sed 's/.config$//' | tr '\n' ' ')
+          echo "user_configs=$USER_CONFIGS" >> $GITHUB_OUTPUT
+          
+          # 从基础配置中提取设备列表
+          DEVICE_LIST=$(grep -o 'CONFIG_TARGET_DEVICE_.*_DEVICE_.*=y' configs/base_${TARGET_ARCH}.config | sed 's/CONFIG_TARGET_DEVICE_.*_DEVICE_//g' | sed 's/=y//g' | tr '\n' ' ')
+          echo "device_list=$DEVICE_LIST" >> $GITHUB_OUTPUT
+          
+          # 输出摘要信息
+          echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 目标架构: $TARGET_ARCH${{ env.COLOR_RESET }}"
+          echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 基础配置: $BASE_CONFIGS${{ env.COLOR_RESET }}"
+          echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 用户配置: $USER_CONFIGS${{ env.COLOR_RESET }}"
+          echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 设备列表: $DEVICE_LIST${{ env.COLOR_RESET }}"
+          echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 缓存键: $CACHE_KEY${{ env.COLOR_RESET }}"
+          
+          # 输出结束信息
+          echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 环境设置完成${{ env.COLOR_RESET }}"
+
+  # 基础环境编译阶段
+  build-base:
+    needs: setup
+    runs-on: ${{ inputs.ubuntu_version || 'ubuntu-22.04' }}
+    strategy:
+      matrix:
+        base_config: ${{ fromJson(needs.setup.outputs.base_configs) }}
+    outputs:
+      base_path: ${{ steps.build.outputs.base_path }}
+      cache_hit: ${{ steps.cache.outputs.cache-hit }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialization Environment
+        run: |
+          # 输出开始信息
+          echo -e "${{ env.COLOR_CYAN }}${{ env.ICON_START }} 开始初始化编译环境${{ env.COLOR_RESET }}"
+          
+          # 设置环境变量
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y $(curl -fsSL is.gd/depends_ubuntu_2204)
+          sudo systemctl daemon-reload
+          sudo timedatectl set-timezone "$TZ"
+          
+          # 输出结束信息
+          echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 环境初始化完成${{ env.COLOR_RESET }}"
+
+      - name: Cache Base Environment
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            openwrt/
+            .ccache
+            staging_dir
+          key: ${{ needs.setup.outputs.cache_key }}-${{ matrix.base_config }}
+          restore-keys: |
+            ${{ needs.setup.outputs.cache_key }}-
+            openwrt-
+
+      - name: Clone Source Code
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          # 输出开始信息
+          echo -e "${{ env.COLOR_CYAN }}${{ env.ICON_START }} 开始克隆源代码${{ env.COLOR_RESET }}"
+          
+          # 创建工作目录
+          mkdir -p openwrt
+          cd openwrt
+          
+          # 克隆源代码
+          git clone --depth 1 -b $REPO_BRANCH $REPO_URL .
+          
+          # 输出结束信息
+          echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 源代码克隆完成${{ env.COLOR_RESET }}"
+
+      - name: Load Base Configuration
+        id: build
+        run: |
+          # 输出开始信息
+          echo -e "${{ env.COLOR_CYAN }}${{ env.ICON_CONFIG }} 开始加载基础配置: ${{ matrix.base_config }}${{ env.COLOR_RESET }}"
+          
+          # 进入源代码目录
+          cd openwrt
+          
+          # 复制基础配置
+          cp ../configs/${{ matrix.base_config }}.config .config
+          
+          # 运行自定义脚本
+          chmod +x ../scripts/diy.sh
+          ../scripts/diy.sh
+          
+          # 更新feeds
+          echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_PACKAGE }} 更新软件源${{ env.COLOR_RESET }}"
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          
+          # 添加第三方软件源
+          chmod +x ../scripts/repo.sh
+          ../scripts/repo.sh
+          
+          # 再次更新feeds
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          
+          # 生成defconfig
+          make defconfig
+          
+          # 输出配置信息
+          echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 当前配置包含的软件包:${{ env.COLOR_RESET }}"
+          grep "CONFIG_PACKAGE_.*=y" .config | head -20
+          
+          # 设置输出变量
+          echo "base_path=$PWD" >> $GITHUB_OUTPUT
+          
+          # 输出结束信息
+          echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 基础配置加载完成${{ env.COLOR_RESET }}"
+
+      - name: Download Base Packages
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          # 输出开始信息
+          echo -e "${{ env.COLOR_CYAN }}${{ env.ICON_PACKAGE }} 开始下载基础软件包${{ env.COLOR_RESET }}"
+          
+          # 进入源代码目录
+          cd openwrt
+          
+          # 下载软件包
+          make download -j$(nproc)
+          
+          # 输出结束信息
+          echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 基础软件包下载完成${{ env.COLOR_RESET }}"
+
+      - name: Build Base Environment
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          # 输出开始信息
+          echo -e "${{ env.COLOR_CYAN }}${{ env.ICON_START }} 开始构建基础环境${{ env.COLOR_RESET }}"
+          
+          # 进入源代码目录
+          cd openwrt
+          
+          # 构建工具链
+          echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 构建工具链${{ env.COLOR_RESET }}"
+          make toolchain/install -j$(nproc) || {
+            echo -e "${{ env.COLOR_RED }}${{ env.ICON_ERROR }} 工具链构建失败${{ env.COLOR_RESET }}"
+            exit 1
+          }
+          
+          # 输出结束信息
+          echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 基础环境构建完成${{ env.COLOR_RESET }}"
+
+  # 多配置编译阶段
+  build-configs:
+    needs: [setup, build-base]
+    runs-on: ${{ inputs.ubuntu_version || 'ubuntu-22.04' }}
+    if: needs.build-base.outputs.cache_hit == 'true' || success()
+    strategy:
+      matrix:
+        base_config: ${{ fromJson(needs.setup.outputs.base_configs) }}
+        user_config: ${{ fromJson(needs.setup.outputs.user_configs) }}
+        device: ${{ fromJson(needs.setup.outputs.device_list) }}
+      fail-fast: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore Base Environment
+        uses: actions/cache@v4
+        with:
+          path: |
+            openwrt/
+            .ccache
+            staging_dir
+          key: ${{ needs.setup.outputs.cache_key }}-${{ matrix.base_config }}
+
+      - name: Load User Configuration
+        run: |
+          # 输出开始信息
+          echo -e "${{ env.COLOR_CYAN }}${{ env.ICON_CONFIG }} 开始加载用户配置: ${{ matrix.user_config }}${{ env.COLOR_RESET }}"
+          
+          # 进入源代码目录
+          cd openwrt
+          
+          # 备份原始配置
+          cp .config .config.base
+          
+          # 合并用户配置
+          cat ../configs/${{ matrix.user_config }}.config >> .config
+          
+          # 设置目标设备
+          sed -i "s/CONFIG_TARGET_DEVICE_.*_DEVICE_.*/CONFIG_TARGET_DEVICE_$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')_$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')_DEVICE_${{ matrix.device }}=y/" .config
+          
+          # 运行defconfig
+          make defconfig
+          
+          # 分析配置差异
+          echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 配置差异分析:${{ env.COLOR_RESET }}"
+          diff -u .config.base .config || true
+          
+          # 检查luci软件包
+          echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_PACKAGE }} 当前配置包含的luci软件包:${{ env.COLOR_RESET }}"
+          grep "CONFIG_PACKAGE_luci-.*=y" .config | wc -l
+          
+          # 输出结束信息
+          echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 用户配置加载完成${{ env.COLOR_RESET }}"
+
+      - name: Check Luci Packages
+        run: |
+          # 输出开始信息
+          echo -e "${{ env.COLOR_CYAN }}${{ env.ICON_PACKAGE }} 开始检查luci软件包${{ env.COLOR_RESET }}"
+          
+          # 进入源代码目录
+          cd openwrt
+          
+          # 获取用户配置中的luci软件包列表
+          USER_LUCI=$(grep "CONFIG_PACKAGE_luci-.*=y" ../configs/${{ matrix.user_config }}.config | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g' | tr '\n' ' ')
+          
+          # 获取当前配置中的luci软件包列表
+          CURRENT_LUCI=$(grep "CONFIG_PACKAGE_luci-.*=y" .config | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g' | tr '\n' ' ')
+          
+          # 检查缺失的软件包
+          MISSING_LUCI=""
+          for pkg in $USER_LUCI; do
+            if ! echo $CURRENT_LUCI | grep -q $pkg; then
+              MISSING_LUCI="$MISSING_LUCI $pkg"
+            fi
+          done
+          
+          # 输出检查结果
+          if [ -n "$MISSING_LUCI" ]; then
+            echo -e "${{ env.COLOR_RED }}${{ env.ICON_ERROR }} 发现缺失的luci软件包: $MISSING_LUCI${{ env.COLOR_RESET }}"
+            echo -e "${{ env.COLOR_YELLOW }}${{ env.ICON_WARNING }} 这可能是由于软件包依赖问题或软件包不存在${{ env.COLOR_RESET }}"
+            
+            # 尝试修复缺失的软件包
+            echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 尝试修复缺失的软件包${{ env.COLOR_RESET }}"
+            for pkg in $MISSING_LUCI; do
+              echo "CONFIG_PACKAGE_$pkg=y" >> .config
+            done
+            
+            # 再次运行defconfig
+            make defconfig
+            
+            # 再次检查
+            FIXED_LUCI=$(grep "CONFIG_PACKAGE_luci-.*=y" .config | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g' | tr '\n' ' ')
+            STILL_MISSING=""
+            for pkg in $MISSING_LUCI; do
+              if ! echo $FIXED_LUCI | grep -q $pkg; then
+                STILL_MISSING="$STILL_MISSING $pkg"
+              fi
+            done
+            
+            if [ -n "$STILL_MISSING" ]; then
+              echo -e "${{ env.COLOR_RED }}${{ env.ICON_ERROR }} 无法修复的luci软件包: $STILL_MISSING${{ env.COLOR_RESET }}"
+              echo -e "${{ env.COLOR_YELLOW }}${{ env.ICON_WARNING }} 请检查软件包名称是否正确或是否存在${{ env.COLOR_RESET }}"
+              exit 1
+            else
+              echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 所有luci软件包已成功修复${{ env.COLOR_RESET }}"
+            fi
+          else
+            echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 所有luci软件包都已正确配置${{ env.COLOR_RESET }}"
+          fi
+          
+          # 输出最终luci软件包列表
+          echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 最终luci软件包列表:${{ env.COLOR_RESET }}"
+          grep "CONFIG_PACKAGE_luci-.*=y" .config | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g'
+          
+          # 输出结束信息
+          echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} luci软件包检查完成${{ env.COLOR_RESET }}"
+
+      - name: Build Firmware
+        run: |
+          # 输出开始信息
+          echo -e "${{ env.COLOR_CYAN }}${{ env.ICON_START }} 开始编译固件${{ env.COLOR_RESET }}"
+          echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 目标设备: ${{ matrix.device }}${{ env.COLOR_RESET }}"
+          echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 基础配置: ${{ matrix.base_config }}${{ env.COLOR_RESET }}"
+          echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 用户配置: ${{ matrix.user_config }}${{ env.COLOR_RESET }}"
+          
+          # 进入源代码目录
+          cd openwrt
+          
+          # 编译固件
+          make -j$(nproc) || {
+            echo -e "${{ env.COLOR_RED }}${{ env.ICON_ERROR }} 固件编译失败${{ env.COLOR_RESET }}"
+            echo -e "${{ env.COLOR_YELLOW }}${{ env.ICON_WARNING }} 尝试单线程编译${{ env.COLOR_RESET }}"
+            make -j1 V=s || {
+              echo -e "${{ env.COLOR_RED }}${{ env.ICON_ERROR }} 单线程编译也失败${{ env.COLOR_RESET }}"
+              exit 1
+            }
+          }
+          
+          # 输出结束信息
+          echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 固件编译完成${{ env.COLOR_RESET }}"
+
+      - name: Organize Files
+        run: |
+          # 输出开始信息
+          echo -e "${{ env.COLOR_CYAN }}${{ env.ICON_PACKAGE }} 开始整理文件${{ env.COLOR_RESET }}"
+          
+          # 创建临时目录
+          mkdir -p ../temp_artifacts/${{ matrix.device }}-${{ matrix.user_config }}
+          
+          # 进入源代码目录
+          cd openwrt
+          
+          # 获取分支缩写
+          BRANCH_ABBR=$(echo $REPO_URL | awk -F '/' '{print $NF}' | sed 's/immortalwrt/immwrt/g' | sed 's/openwrt/openwrt/g' | sed 's/libwrt/libwrt/g')
+          
+          # 获取芯片变量
+          CHIP_VAR=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
+          
+          # 复制并重命名固件文件
+          for bin in bin/targets/*/*/*.bin; do
+            if [[ $bin == *factory.bin ]]; then
+              cp $bin ../temp_artifacts/${{ matrix.device }}-${{ matrix.user_config }}/${BRANCH_ABBR}-${CHIP_VAR}-${{ matrix.device }}-factory-${{ matrix.user_config }}.bin
+            elif [[ $bin == *sysupgrade.bin ]]; then
+              cp $bin ../temp_artifacts/${{ matrix.device }}-${{ matrix.user_config }}/${BRANCH_ABBR}-${CHIP_VAR}-${{ matrix.device }}-sysupgrade-${{ matrix.user_config }}.bin
+            fi
+          done
+          
+          # 复制并重命名配置文件
+          cp .config ../temp_artifacts/${{ matrix.device }}-${{ matrix.user_config }}/${BRANCH_ABBR}-${CHIP_VAR}-${{ matrix.device }}-${{ matrix.user_config }}.config
+          
+          # 复制并重命名manifest文件
+          cp bin/targets/*/*/*.manifest ../temp_artifacts/${{ matrix.device }}-${{ matrix.user_config }}/${BRANCH_ABBR}-${CHIP_VAR}-${{ matrix.device }}-${{ matrix.user_config }}.manifest
+          
+          # 复制并重命名buildinfo文件
+          cp bin/targets/*/*/config.buildinfo ../temp_artifacts/${{ matrix.device }}-${{ matrix.user_config }}/${BRANCH_ABBR}-${CHIP_VAR}-${{ matrix.device }}-${{ matrix.user_config }}.config.buildinfo
+          
+          # 复制软件包
+          mkdir -p ../temp_artifacts/packages-${{ matrix.user_config }}
+          find bin/packages -name "*.ipk" -o -name "*.apk" | xargs -I {} cp {} ../temp_artifacts/packages-${{ matrix.user_config }}/
+          
+          # 输出结束信息
+          echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 文件整理完成${{ env.COLOR_RESET }}"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.device }}-${{ matrix.user_config }}
+          path: temp_artifacts/${{ matrix.device }}-${{ matrix.user_config }}/
+          retention-days: 7
+
+  # 发布阶段
+  release:
+    needs: [setup, build-configs]
+    runs-on: ${{ inputs.ubuntu_version || 'ubuntu-22.04' }}
+    if: always() && needs.build-configs.result != 'failure'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all_artifacts
+
+      - name: Organize Release Files
+        run: |
+          # 输出开始信息
+          echo -e "${{ env.COLOR_CYAN }}${{ env.ICON_PACKAGE }} 开始整理发布文件${{ env.COLOR_RESET }}"
+          
+          # 创建发布目录
+          mkdir -p release_files
+          
+          # 获取芯片变量
+          CHIP_VAR="${{ needs.setup.outputs.target_arch }}"
+          
+          # 合并所有配置文件
+          mkdir -p release_files/${CHIP_VAR}-config
+          find all_artifacts -name "*.config" -exec cp {} release_files/${CHIP_VAR}-config/ \;
+          cd release_files/${CHIP_VAR}-config
+          tar -zcf ../${CHIP_VAR}-config.tar.gz .
+          cd -
+          
+          # 合并所有manifest文件
+          mkdir -p release_files/${CHIP_VAR}-manifest
+          find all_artifacts -name "*.manifest" -exec cp {} release_files/${CHIP_VAR}-manifest/ \;
+          cd release_files/${CHIP_VAR}-manifest
+          tar -zcf ../${CHIP_VAR}-manifest.tar.gz .
+          cd -
+          
+          # 合并所有buildinfo文件
+          mkdir -p release_files/${CHIP_VAR}-buildinfo
+          find all_artifacts -name "*.config.buildinfo" -exec cp {} release_files/${CHIP_VAR}-buildinfo/ \;
+          cd release_files/${CHIP_VAR}-buildinfo
+          tar -zcf ../${CHIP_VAR}-buildinfo.tar.gz .
+          cd -
+          
+          # 合并所有软件包
+          mkdir -p release_files/${CHIP_VAR}-packages
+          find all_artifacts -name "*.ipk" -o -name "*.apk" | xargs -I {} cp {} release_files/${CHIP_VAR}-packages/
+          cd release_files/${CHIP_VAR}-packages
+          tar -zcf ../${CHIP_VAR}-packages.tar.gz .
+          cd -
+          
+          # 复制所有固件文件
+          find all_artifacts -name "*.bin" -exec cp {} release_files/ \;
+          
+          # 创建发布信息
+          cat > release_files/README.md << EOF
+          # OpenWrt 固件发布
+          
+          ## 📒 固件信息
+          - 🌐 默认地址: **192.168.111.1**
+          - 🔑 默认密码: none
+          - 🖥️ 机器名: WRT
+          
+          ## 📦 文件说明
+          - \`${CHIP_VAR}-config.tar.gz\`: 所有配置文件
+          - \`${CHIP_VAR}-manifest.tar.gz\`: 所有软件包清单
+          - \`${CHIP_VAR}-buildinfo.tar.gz\`: 所有构建信息
+          - \`${CHIP_VAR}-packages.tar.gz\`: 所有软件包
+          - \*.bin: 固件文件
+          
+          ## 🔧 固件命名规则
+          - 格式: 分支缩写-芯片变量-设备名称-类型-配置.bin
+          - 示例: immwrt-ipq60xx-jdcloud_re-ss-01-sysupgrade-Pro.bin
+          
+          ## 📝 编译信息
+          - 编译时间: $(date +"%Y-%m-%d %H:%M:%S")
+          - 源码地址: $REPO_URL
+          - 源码分支: $REPO_BRANCH
+          EOF
+          
+          # 输出结束信息
+          echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 发布文件整理完成${{ env.COLOR_RESET }}"
+
+      - name: Create Release
+        uses: ncipollo/release-action@v1
+        with:
+          name: OpenWrt 固件发布 - $(date +"%Y.%m.%d")
+          tag: openwrt-$(date +"%Y%m%d")
+          artifacts: release_files/*
+          bodyFile: release_files/README.md
+          allowUpdates: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+          draft: false
+
+      - name: Cleanup
+        run: |
+          # 输出开始信息
+          echo -e "${{ env.COLOR_CYAN }}${{ env.ICON_START }} 开始清理${{ env.COLOR_RESET }}"
+          
+          # 删除旧缓存
+          gh cache list --key ${{ needs.setup.outputs.cache_key }}- --json key --jq '.[] | .key' | while read -r key; do
+            gh cache delete "$key"
+          done
+          
+          # 输出结束信息
+          echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 清理完成${{ env.COLOR_RESET }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
