@@ -21,52 +21,64 @@ on:
           - Pro
           - Max
           - Ultra
-          - All # 新增一个“全部编译”的选项
+          - All
 
 env:
-  REPO_URL: https://github.com/openwrt/openwrt.git # 默认值，会被矩阵覆盖
-  REPO_BRANCH: master
-  FEEDS_CONF: feeds.conf.default
-  CONFIG_FILE: .config
+  # 这些环境变量可以在所有步骤中引用
   DIY_P1_SH: .github/scripts/diy.sh
   DIY_P2_SH: .github/scripts/repo.sh
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
-  UPLOAD_COWTRANSFER: false
-  UPLOAD_WETRANSFER: false
-  UPLOAD_RELEASE: false
   TZ: Asia/Shanghai
 
 jobs:
   build:
+    # 【关键修正】使用 if 条件来精确控制哪个矩阵作业应该运行
+    # 这个条件会根据用户的手动输入来过滤矩阵中定义的作业
+    if: >
+      (github.event.inputs.config == 'All' || matrix.config == github.event.inputs.config) &&
+      (github.event.inputs.branch == matrix.branch)
+    
     runs-on: ubuntu-22.04
     
-    # 核心策略：动态矩阵
+    # 【关键修正】合并所有矩阵项到一个 include 列表中
     strategy:
-      fail-fast: false # 一个配置失败，其他配置继续编译
+      fail-fast: false
       matrix:
-        # 根据用户输入决定矩阵内容
         include:
-          # 如果用户选择 'All'，则展开所有配置
-          - ${{ if github.event.inputs.config == 'All' }}
-            config: Pro
-          - ${{ if github.event.inputs.config == 'All' }}
-            config: Max
-          - ${{ if github.event.inputs.config == 'All' }}
-            config: Ultra
-          # 如果用户选择特定配置，则只编译该配置
-          - ${{ if github.event.inputs.config != 'All' }}
-            config: ${{ github.event.inputs.config }}
-
-        # 将分支信息映射到矩阵变量，这是扩展性的关键
-        include:
+          # --- ImmortalWrt 分支的所有配置 ---
           - branch: 'immwrt'
+            config: 'Pro'
             REPO_URL: 'https://github.com/laipeng668/immortalwrt.git'
             REPO_BRANCH: 'master'
             REPO_SHORT: 'immwrt'
-          # - branch: 'openwrt' # 未来只需在这里添加新分支映射
-          #   REPO_URL: 'https://github.com/laipeng668/openwrt.git'
-          #   REPO_BRANCH: 'master'
+          - branch: 'immwrt'
+            config: 'Max'
+            REPO_URL: 'https://github.com/laipeng668/immortalwrt.git'
+            REPO_BRANCH: 'master'
+            REPO_SHORT: 'immwrt'
+          - branch: 'immwrt'
+            config: 'Ultra'
+            REPO_URL: 'https://github.com/laipeng668/immortalwrt.git'
+            REPO_BRANCH: 'master'
+            REPO_SHORT: 'immwrt'
+          
+          # --- 未来扩展：在此处添加其他分支的所有配置 ---
+          # --- OpenWrt 分支 ---
+          # - branch: 'openwrt'
+          #   config: 'Pro'
+          #   REPO_URL: 'https://github.com/openwrt/openwrt.git'
+          #   REPO_BRANCH: 'main'
+          #   REPO_SHORT: 'openwrt'
+          # - branch: 'openwrt'
+          #   config: 'Max'
+          #   REPO_URL: 'https://github.com/openwrt/openwrt.git'
+          #   REPO_BRANCH: 'main'
+          #   REPO_SHORT: 'openwrt'
+          # - branch: 'openwrt'
+          #   config: 'Ultra'
+          #   REPO_URL: 'https://github.com/openwrt/openwrt.git'
+          #   REPO_BRANCH: 'main'
           #   REPO_SHORT: 'openwrt'
 
     steps:
@@ -92,7 +104,8 @@ jobs:
           path: |
             openwrt/toolchain
             openwrt/dl
-          key: ${{ runner.os }}-base-${{ matrix.REPO_SHORT }}-${{ hashFiles('**/base_ipq60xx.config', '**/base_immwrt.config') }}
+          # 【关键修正】缓存键需要精确匹配基础配置文件
+          key: ${{ runner.os }}-base-${{ matrix.REPO_SHORT }}-${{ hashFiles('**/base_ipq60xx.config', '**/base_immwrt.config', '**/base_openwrt.config', '**/base_libwrt.config') }}
           restore-keys: |
             ${{ runner.os }}-base-${{ matrix.REPO_SHORT }}-
 
@@ -117,17 +130,16 @@ jobs:
           cat $GITHUB_WORKSPACE/.github/configs/base_${{ matrix.REPO_SHORT }}.config >> .config
           cat $GITHUB_WORKSPACE/.github/configs/${{ matrix.config }}.config >> .config
           
-          # 2. 【关键】使用 defconfig 处理依赖，确保 Luci 包能被正确识别和配置
+          # 2. 【关键】使用 defconfig 处理依赖
           make defconfig
           
           # 3. (可选) 打印最终配置用于调试
-          cat .config
+          # cat .config
 
       - name: Download Packages
         id: download
         run: |
           cd openwrt
-          make defconfig
           make download -j8
           find dl -size -1024c -exec ls -l {} \;
           find dl -size -1024c -exec rm -f {} \;
@@ -143,13 +155,6 @@ jobs:
           [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
           echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-      - name: Upload Firmware Directory
-        uses: actions/upload-artifact@v4
-        if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-        with:
-          name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-          path: openwrt/bin/
-
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
@@ -159,3 +164,4 @@ jobs:
             openwrt/bin/targets/*/*
             !openwrt/bin/targets/*/*.manifest
             !openwrt/bin/targets/*/*.json
+          retention-days: 30
