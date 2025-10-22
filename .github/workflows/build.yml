@@ -25,10 +25,10 @@ on:
         default: 'Pro'
         type: choice
         options:
+          - All      # 您可以放心地将 'All' 放在首位
           - Pro
           - Max
           - Ultra
-          - All
 
 # ===============================================================
 # 全局环境变量：这些变量可以在所有 Job 和所有 Step 中引用
@@ -63,16 +63,9 @@ jobs:
       - name: 生成编译矩阵
         id: set-matrix # 为此步骤设置一个 ID，方便后面引用其输出
         run: |
-          # 我们使用 `jq` 这个强大的命令行 JSON 处理器来动态构建矩阵
-          # 这比用 shell 脚本拼接字符串要安全、可靠得多
-
-          # 1. 定义一个包含所有可能组合的 JSON 字符串
-          ALL_COMBITIONS='[
-            {"branch": "immwrt", "config": "Pro", "repo_url": "https://github.com/laipeng668/immortalwrt.git", "repo_branch": "master", "repo_short": "immwrt"},
-            {"branch": "immwrt", "config": "Max", "repo_url": "https://github.com/laipeng668/immortalwrt.git", "repo_branch": "master", "repo_short": "immwrt"},
-            {"branch": "immwrt", "config": "Ultra", "repo_url": "https://github.com/laipeng668/immortalwrt.git", "repo_branch": "master", "repo_short": "immwrt"}
-            # 在这里添加未来其他分支的所有组合
-          ]'
+          # 【关键修正】为了避免多行字符串在 YAML 中可能引入的格式问题，我们将 JSON 压缩到一行。
+          # 这能确保传递给 `jq` 的是一个纯净、无误的 JSON 字符串。
+          ALL_COMBITIONS='[{"branch": "immwrt", "config": "Pro", "repo_url": "https://github.com/laipeng668/immortalwrt.git", "repo_branch": "master", "repo_short": "immwrt"}, {"branch": "immwrt", "config": "Max", "repo_url": "https://github.com/laipeng668/immortalwrt.git", "repo_branch": "master", "repo_short": "immwrt"}, {"branch": "immwrt", "config": "Ultra", "repo_url": "https://github.com/laipeng668/immortalwrt.git", "repo_branch": "master", "repo_short": "immwrt"}]'
 
           # 2. 获取用户的手动输入
           INPUT_BRANCH="${{ github.event.inputs.branch }}"
