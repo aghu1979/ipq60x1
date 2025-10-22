@@ -1,6 +1,8 @@
 name: OpenWrt Multi-Config Build
 
 on:
+  push:
+    branches: [ main, master ]
   workflow_dispatch:
     inputs:
       ubuntu_version:
@@ -76,17 +78,31 @@ jobs:
           
           # 获取基础配置列表并转换为JSON格式
           BASE_CONFIGS=$(ls configs/base_*.config 2>/dev/null | xargs -n 1 basename | sed 's/.config$//' | tr '\n' ' ')
-          BASE_CONFIGS_JSON=$(echo "$BASE_CONFIGS" | sed 's/[^ ]* */"&"/g' | sed 's/ /,/g' | sed 's/^/[/g' | sed 's/$/]/g')
+          # 修复JSON格式问题：正确处理空列表和单个元素
+          if [ -z "$BASE_CONFIGS" ]; then
+            BASE_CONFIGS_JSON="[]"
+          else
+            # 将空格分隔的列表转换为JSON数组
+            BASE_CONFIGS_JSON=$(echo "$BASE_CONFIGS" | jq -R 'split(" ") | map(select(length > 0))')
+          fi
           echo "base_configs_json=$BASE_CONFIGS_JSON" >> $GITHUB_OUTPUT
           
           # 获取用户配置列表并转换为JSON格式
           USER_CONFIGS=$(ls configs/[Pp]ro.config configs/[Mm]ax.config configs/[Uu]ltra.config 2>/dev/null | xargs -n 1 basename | sed 's/.config$//' | tr '\n' ' ')
-          USER_CONFIGS_JSON=$(echo "$USER_CONFIGS" | sed 's/[^ ]* */"&"/g' | sed 's/ /,/g' | sed 's/^/[/g' | sed 's/$/]/g')
+          if [ -z "$USER_CONFIGS" ]; then
+            USER_CONFIGS_JSON="[]"
+          else
+            USER_CONFIGS_JSON=$(echo "$USER_CONFIGS" | jq -R 'split(" ") | map(select(length > 0))')
+          fi
           echo "user_configs_json=$USER_CONFIGS_JSON" >> $GITHUB_OUTPUT
           
           # 从基础配置中提取设备列表并转换为JSON格式
           DEVICE_LIST=$(grep -o 'CONFIG_TARGET_DEVICE_.*_DEVICE_.*=y' configs/base_${TARGET_ARCH}.config 2>/dev/null | sed 's/CONFIG_TARGET_DEVICE_.*_DEVICE_//g' | sed 's/=y//g' | tr '\n' ' ')
-          DEVICE_LIST_JSON=$(echo "$DEVICE_LIST" | sed 's/[^ ]* */"&"/g' | sed 's/ /,/g' | sed 's/^/[/g' | sed 's/$/]/g')
+          if [ -z "$DEVICE_LIST" ]; then
+            DEVICE_LIST_JSON="[]"
+          else
+            DEVICE_LIST_JSON=$(echo "$DEVICE_LIST" | jq -R 'split(" ") | map(select(length > 0))')
+          fi
           echo "device_list=$DEVICE_LIST" >> $GITHUB_OUTPUT
           echo "device_list_json=$DEVICE_LIST_JSON" >> $GITHUB_OUTPUT
           
@@ -109,6 +125,8 @@ jobs:
   build-base:
     needs: setup
     runs-on: ${{ inputs.ubuntu_version || 'ubuntu-22.04' }}
+    # 只有当基础配置列表不为空时才执行
+    if: fromJson(needs.setup.outputs.base_configs_json)[0] != ''
     strategy:
       matrix:
         base_config: ${{ fromJson(needs.setup.outputs.base_configs_json) }}
@@ -242,7 +260,8 @@ jobs:
   build-configs:
     needs: [setup, build-base]
     runs-on: ${{ inputs.ubuntu_version || 'ubuntu-22.04' }}
-    if: always() && (needs.build-base.result == 'success' || needs.build-base.result == 'skipped')
+    # 只有当基础环境构建成功且配置列表不为空时才执行
+    if: always() && (needs.build-base.result == 'success' || needs.build-base.result == 'skipped') && fromJson(needs.setup.outputs.user_configs_json)[0] != '' && fromJson(needs.setup.outputs.device_list_json)[0] != ''
     strategy:
       matrix:
         base_config: ${{ fromJson(needs.setup.outputs.base_configs_json) }}
@@ -433,17 +452,22 @@ jobs:
   release:
     needs: [setup, build-configs]
     runs-on: ${{ inputs.ubuntu_version || 'ubuntu-22.04' }}
+    # 只有当编译成功或有编译任务时才执行
     if: always() && (needs.build-configs.result == 'success' || needs.build-configs.result == 'skipped')
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Download All Artifacts
+        # 只有当有编译任务时才下载artifacts
+        if: needs.build-configs.result == 'success'
         uses: actions/download-artifact@v4
         with:
           path: all_artifacts
 
       - name: Organize Release Files
+        # 只有当有artifacts时才整理文件
+        if: needs.build-configs.result == 'success'
         run: |
           # 输出开始信息
           echo -e "${{ env.COLOR_CYAN }}${{ env.ICON_PACKAGE }} 开始整理发布文件${{ env.COLOR_RESET }}"
@@ -515,6 +539,8 @@ jobs:
           echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 发布文件整理完成${{ env.COLOR_RESET }}"
 
       - name: Create Release
+        # 只有当有artifacts时才创建release
+        if: needs.build-configs.result == 'success'
         uses: ncipollo/release-action@v1
         with:
           name: OpenWrt 固件发布 - $(date +"%Y.%m.%d")
