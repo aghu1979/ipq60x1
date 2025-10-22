@@ -1,5 +1,12 @@
+# ===============================================================
+# 工作流名称，会显示在 GitHub Actions 的页面上
+# ===============================================================
 name: Multi-Config OpenWrt Build
 
+# ===============================================================
+# 触发器：定义何时运行此工作流
+# workflow_dispatch: 允许我们手动在 GitHub 网页上触发运行
+# ===============================================================
 on:
   workflow_dispatch:
     inputs:
@@ -23,69 +30,98 @@ on:
           - Ultra
           - All
 
+# ===============================================================
+# 全局环境变量：这些变量可以在所有 Job 和所有 Step 中引用
+# ===============================================================
 env:
-  # 这些环境变量可以在所有步骤中引用
   DIY_P1_SH: .github/scripts/diy.sh
   DIY_P2_SH: .github/scripts/repo.sh
-  UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   TZ: Asia/Shanghai
 
+# ===============================================================
+# Jobs: 定义要执行的任务列表
+# 我们将定义两个 Job:
+# 1. setup-matrix: 准备编译矩阵
+# 2. build: 执行编译
+# ===============================================================
 jobs:
+  # -----------------------------------------------------------------
+  # Job 1: setup-matrix
+  # 作用：根据用户的手动输入，动态生成一个编译矩阵，并传递给下一个 Job
+  # -----------------------------------------------------------------
+  setup-matrix:
+    name: 准备编译矩阵
+    runs-on: ubuntu-latest # 运行在最新的 Ubuntu 虚拟机上
+
+    # 定义此 Job 的输出，这些输出可以被其他 Job 引用
+    outputs:
+      # 输出一个名为 'matrix' 的变量，其值来自下面步骤的输出
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+
+    steps:
+      - name: 生成编译矩阵
+        id: set-matrix # 为此步骤设置一个 ID，方便后面引用其输出
+        run: |
+          # 我们使用 `jq` 这个强大的命令行 JSON 处理器来动态构建矩阵
+          # 这比用 shell 脚本拼接字符串要安全、可靠得多
+
+          # 1. 定义一个包含所有可能组合的 JSON 字符串
+          ALL_COMBITIONS='[
+            {"branch": "immwrt", "config": "Pro", "repo_url": "https://github.com/laipeng668/immortalwrt.git", "repo_branch": "master", "repo_short": "immwrt"},
+            {"branch": "immwrt", "config": "Max", "repo_url": "https://github.com/laipeng668/immortalwrt.git", "repo_branch": "master", "repo_short": "immwrt"},
+            {"branch": "immwrt", "config": "Ultra", "repo_url": "https://github.com/laipeng668/immortalwrt.git", "repo_branch": "master", "repo_short": "immwrt"}
+            # 在这里添加未来其他分支的所有组合
+          ]'
+
+          # 2. 获取用户的手动输入
+          INPUT_BRANCH="${{ github.event.inputs.branch }}"
+          INPUT_CONFIG="${{ github.event.inputs.config }}"
+
+          # 3. 使用 `jq` 根据用户输入过滤 JSON
+          #    `select()` 函数用于筛选符合条件的对象
+          FINAL_MATRIX=$(echo "$ALL_COMBITIONS" | jq --arg branch "$INPUT_BRANCH" --arg config "$INPUT_CONFIG" '
+            [
+              .[] | 
+              select(
+                (.branch == $branch) and 
+                ($config == "All" or .config == $config)
+              )
+            ]
+          ')
+
+          # 4. 将最终的 JSON 矩阵输出，以便下一个 Job 使用
+          #    $GITHUB_OUTPUT 是一个特殊的文件，写入它的内容会成为 Job 的输出
+          echo "Generated matrix for build job: $FINAL_MATRIX"
+          echo "matrix=$FINAL_MATRIX" >> $GITHUB_OUTPUT
+
+  # -----------------------------------------------------------------
+  # Job 2: build
+  # 作用：执行实际的固件编译任务
+  # -----------------------------------------------------------------
   build:
-    # 【关键修正】使用 if 条件来精确控制哪个矩阵作业应该运行
-    # 这个条件会根据用户的手动输入来过滤矩阵中定义的作业
-    if: >
-      (github.event.inputs.config == 'All' || matrix.config == github.event.inputs.config) &&
-      (github.event.inputs.branch == matrix.branch)
+    # name: 使用矩阵变量来动态命名 Job，方便在 Actions 页面识别
+    name: 编译 ${{ matrix.repo_short }} (${{ matrix.config }})
     
+    # needs: 声明此 Job 依赖于 setup-matrix Job 的成功完成
+    needs: setup-matrix
+    
+    # 如果 setup-matrix 输出的矩阵为空，则跳过此 Job
+    if: fromJson(needs.setup-matrix.outputs.matrix)[0] != null
+
     runs-on: ubuntu-22.04
-    
-    # 【关键修正】合并所有矩阵项到一个 include 列表中
+
+    # strategy: 定义矩阵策略
+    # matrix: 矩阵的内容直接从 setup-matrix Job 的输出中解析而来
     strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # --- ImmortalWrt 分支的所有配置 ---
-          - branch: 'immwrt'
-            config: 'Pro'
-            REPO_URL: 'https://github.com/laipeng668/immortalwrt.git'
-            REPO_BRANCH: 'master'
-            REPO_SHORT: 'immwrt'
-          - branch: 'immwrt'
-            config: 'Max'
-            REPO_URL: 'https://github.com/laipeng668/immortalwrt.git'
-            REPO_BRANCH: 'master'
-            REPO_SHORT: 'immwrt'
-          - branch: 'immwrt'
-            config: 'Ultra'
-            REPO_URL: 'https://github.com/laipeng668/immortalwrt.git'
-            REPO_BRANCH: 'master'
-            REPO_SHORT: 'immwrt'
-          
-          # --- 未来扩展：在此处添加其他分支的所有配置 ---
-          # --- OpenWrt 分支 ---
-          # - branch: 'openwrt'
-          #   config: 'Pro'
-          #   REPO_URL: 'https://github.com/openwrt/openwrt.git'
-          #   REPO_BRANCH: 'main'
-          #   REPO_SHORT: 'openwrt'
-          # - branch: 'openwrt'
-          #   config: 'Max'
-          #   REPO_URL: 'https://github.com/openwrt/openwrt.git'
-          #   REPO_BRANCH: 'main'
-          #   REPO_SHORT: 'openwrt'
-          # - branch: 'openwrt'
-          #   config: 'Ultra'
-          #   REPO_URL: 'https://github.com/openwrt/openwrt.git'
-          #   REPO_BRANCH: 'main'
-          #   REPO_SHORT: 'openwrt'
+      fail-fast: false # 一个配置失败，其他配置继续编译
+      matrix: ${{ fromJson(needs.setup-matrix.outputs.matrix) }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Initialization Environment
+      - name: 初始化编译环境
         run: |
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo -E apt-get -qq update
@@ -97,46 +133,47 @@ jobs:
           sudo chown $USER:$GROUPS /workdir
 
       # 核心：分层缓存 - 第一层 (基础环境)
-      - name: Cache Base Environment
+      - name: 缓存基础环境
         id: cache-base
         uses: actions/cache@v4
         with:
           path: |
-            openwrt/toolchain
-            openwrt/dl
-          # 【关键修正】缓存键需要精确匹配基础配置文件
-          key: ${{ runner.os }}-base-${{ matrix.REPO_SHORT }}-${{ hashFiles('**/base_ipq60xx.config', '**/base_immwrt.config', '**/base_openwrt.config', '**/base_libwrt.config') }}
+            openwrt/toolchain # 交叉编译工具链
+            openwrt/dl        # 源码下载包
+          # 缓存键：根据操作系统、分支和基础配置文件的哈希值生成
+          key: ${{ runner.os }}-base-${{ matrix.repo_short }}-${{ hashFiles('**/base_ipq60xx.config', '**/base_immwrt.config', '**/base_openwrt.config', '**/base_libwrt.config') }}
+          # 恢复键：如果精确键没命中，则尝试恢复同分支的旧缓存
           restore-keys: |
-            ${{ runner.os }}-base-${{ matrix.REPO_SHORT }}-
+            ${{ runner.os }}-base-${{ matrix.repo_short }}-
 
-      - name: Clone Source Code
+      - name: 克隆源代码
         run: |
           df -hT $PWD
-          git clone ${{ matrix.REPO_URL }} -b ${{ matrix.REPO_BRANCH }} openwrt
+          git clone ${{ matrix.repo_url }} -b ${{ matrix.repo_branch }} openwrt
           cd openwrt
           git log -1 --pretty=format:"%h %s"
 
-      - name: Load Custom Feeds & Scripts
+      - name: 加载自定义脚本和软件源
         run: |
           [ -e $DIY_P1_SH ] && chmod +x $DIY_P1_SH && cd openwrt && $GITHUB_WORKSPACE/$DIY_P1_SH
           [ -e $DIY_P2_SH ] && chmod +x $DIY_P2_SH && cd openwrt && $GITHUB_WORKSPACE/$DIY_P2_SH
 
-      - name: Generate Configuration File
+      - name: 生成最终配置文件
         run: |
           cd openwrt
-          echo "Generating .config for ${{ matrix.config }} on ${{ matrix.REPO_SHORT }}"
-          # 1. 合并配置文件
+          echo "Generating .config for ${{ matrix.config }} on ${{ matrix.repo_short }}"
+          # 1. 按顺序合并基础配置和用户配置文件
           cat $GITHUB_WORKSPACE/.github/configs/base_ipq60xx.config >> .config
-          cat $GITHUB_WORKSPACE/.github/configs/base_${{ matrix.REPO_SHORT }}.config >> .config
+          cat $GITHUB_WORKSPACE/.github/configs/base_${{ matrix.repo_short }}.config >> .config
           cat $GITHUB_WORKSPACE/.github/configs/${{ matrix.config }}.config >> .config
           
-          # 2. 【关键】使用 defconfig 处理依赖
+          # 2. 【关键】使用 defconfig 处理依赖，确保 Luci 包能被正确识别和配置
           make defconfig
           
           # 3. (可选) 打印最终配置用于调试
           # cat .config
 
-      - name: Download Packages
+      - name: 下载软件包
         id: download
         run: |
           cd openwrt
@@ -144,7 +181,7 @@ jobs:
           find dl -size -1024c -exec ls -l {} \;
           find dl -size -1024c -exec rm -f {} \;
 
-      - name: Compile Firmware
+      - name: 编译固件
         id: compile
         run: |
           cd openwrt
@@ -155,13 +192,14 @@ jobs:
           [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
           echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-      - name: Upload Firmware
+      - name: 上传固件
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
         with:
-          name: ${{ matrix.REPO_SHORT }}_${{ matrix.config }}_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+          # 产物名称包含分支、配置、设备名和日期，清晰明了
+          name: ${{ matrix.repo_short }}_${{ matrix.config }}_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
           path: |
             openwrt/bin/targets/*/*
             !openwrt/bin/targets/*/*.manifest
             !openwrt/bin/targets/*/*.json
-          retention-days: 30
+          retention-days: 30 # 产物保留30天
