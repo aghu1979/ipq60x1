@@ -70,17 +70,17 @@ jobs:
           # 合并每个分支的缓存信息
           # openwrt分支
           if [ -n "${{ needs.build-base.outputs['openwrt'].cache-info }}" ]; then
-            CACHE_MAP=$(echo "$CACHE_MAP" | jq -s '.[0] * .[1]' - <<< "${{ needs.build-base.outputs['openwrt'].cache-info }}")
+            CACHE_MAP=$(echo "$CACHE_MAP" | jq -c -s '.[0] * .[1]' - <<< "${{ needs.build-base.outputs['openwrt'].cache-info }}")
           fi
           
           # immwrt分支
           if [ -n "${{ needs.build-base.outputs['immwrt'].cache-info }}" ]; then
-            CACHE_MAP=$(echo "$CACHE_MAP" | jq -s '.[0] * .[1]' - <<< "${{ needs.build-base.outputs['immwrt'].cache-info }}")
+            CACHE_MAP=$(echo "$CACHE_MAP" | jq -c -s '.[0] * .[1]' - <<< "${{ needs.build-base.outputs['immwrt'].cache-info }}")
           fi
           
           # libwrt分支
           if [ -n "${{ needs.build-base.outputs['libwrt'].cache-info }}" ]; then
-            CACHE_MAP=$(echo "$CACHE_MAP" | jq -s '.[0] * .[1]' - <<< "${{ needs.build-base.outputs['libwrt'].cache-info }}")
+            CACHE_MAP=$(echo "$CACHE_MAP" | jq -c -s '.[0] * .[1]' - <<< "${{ needs.build-base.outputs['libwrt'].cache-info }}")
           fi
           
           echo "cache-map=$CACHE_MAP" >> $GITHUB_OUTPUT
