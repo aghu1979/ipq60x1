@@ -72,8 +72,10 @@ check_params() {
 # 提取LUCI软件包
 extract_luci_packages() {
     local config_file=$1
+    # 修复：使用更可靠的方法提取软件包
     grep "^CONFIG_PACKAGE_luci-" "$config_file" 2>/dev/null | \
-    sed 's/^CONFIG_PACKAGE_\(.*\)=\(.*\)/\1=\2/' | sort
+    sed 's/^CONFIG_PACKAGE_luci-\([^=]*\)=\(.*\)/\1=\2/' | \
+    grep -v '^$' | sort
 }
 
 # 主对比函数
@@ -91,11 +93,17 @@ compare_packages() {
     local packages1=$(extract_luci_packages "$config1")
     local packages2=$(extract_luci_packages "$config2")
     
-    local total1=$(echo "$packages1" | wc -l)
-    local total2=$(echo "$packages2" | wc -l)
+    local total1=$(echo "$packages1" | grep -c '.' || echo 0)
+    local total2=$(echo "$packages2" | grep -c '.' || echo 0)
     
     log_info "配置1软件包数: $total1"
     log_info "配置2软件包数: $total2"
+    
+    # 调试输出
+    log_info "配置1软件包列表:"
+    echo "$packages1" | sed 's/^/  /'
+    log_info "配置2软件包列表:"
+    echo "$packages2" | sed 's/^/  /'
     
     # 创建临时文件
     local temp1=$(mktemp)
@@ -175,20 +183,32 @@ EOF
     
     # 找出状态改变的软件包
     local changed_count=0
-    echo "🔄 状态改变的软件包:" >> "$report_file"
-    echo "" >> "$report_file"
+    cat >> "$report_file" << EOF
+### 🔄 状态改变的软件包
+
+| 软件包 | 状态 | 说明 |
+|--------|------|------|
+EOF
     
     # 创建状态映射
     declare -A status1 status2
     while IFS='=' read -r pkg status; do
-        status1["$pkg"]="$status"
+        # 修复：确保软件包名称不为空
+        if [ -n "$pkg" ]; then
+            status1["$pkg"]="$status"
+        fi
     done < "$temp1"
     
     while IFS='=' read -r pkg status; do
-        status2["$pkg"]="$status"
+        # 修复：确保软件包名称不为空
+        if [ -n "$pkg" ]; then
+            status2["$pkg"]="$status"
+        fi
     done < "$temp2"
     
+    # 检查状态改变
     for pkg in "${!status1[@]}"; do
+        # 修复：检查软件包是否在第二个配置中存在
         if [[ -n "${status2[$pkg]}" && "${status1[$pkg]}" != "${status2[$pkg]}" ]]; then
             echo "  🔄 $pkg (${status1[$pkg]} → ${status2[$pkg]})"
             echo "| $pkg | ${status1[$pkg]} → ${status2[$pkg]} | 状态改变 |" >> "$report_file"
@@ -197,8 +217,9 @@ EOF
     done
     
     if [ $changed_count -eq 0 ]; then
-        echo "  无状态改变" >> "$report_file"
+        echo "| 无 | 无 | 无状态改变 |" >> "$report_file"
     fi
+    echo "" >> "$report_file"
     
     # 添加完整软件包列表
     cat >> "$report_file" << EOF
