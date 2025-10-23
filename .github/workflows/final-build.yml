@@ -107,18 +107,18 @@ jobs:
           echo "📦 最终需要的LUCI软件包总数: $TOTAL_PACKAGES"
           
           # 创建检查报告
-          cat > luci-final-check-${{ inputs.config }}.md << EOF
-# 最终LUCI软件包检查报告 - ${{ inputs.config }}
+          cat > luci-final-check-${{ inputs.config }}.md << 'EOF'
+          # 最终LUCI软件包检查报告 - ${{ inputs.config }}
 
-**检查时间**: $(date)  
-**配置**: ${{ inputs.chip }}-${{ inputs.branch }}-${{ inputs.config }}  
-**总软件包数**: $TOTAL_PACKAGES  
+          **检查时间**: $(date)  
+          **配置**: ${{ inputs.chip }}-${{ inputs.branch }}-${{ inputs.config }}  
+          **总软件包数**: $TOTAL_PACKAGES  
 
-## 📦 软件包可用性检查
+          ## 📦 软件包可用性检查
 
-| 软件包 | 状态 | 位置 | 备注 |
-|--------|------|------|------|
-EOF
+          | 软件包 | 状态 | 位置 | 备注 |
+          |--------|------|------|------|
+          EOF
           
           # 检查软件包可用性
           MISSING_COUNT=0
@@ -145,14 +145,14 @@ EOF
           
           # 添加统计信息
           cat >> luci-final-check-${{ inputs.config }}.md << EOF
-
-## 📊 统计信息
-
-- 总软件包数: $TOTAL_PACKAGES
-- 找到软件包: $FOUND_COUNT
-- 缺失软件包: $MISSING_COUNT
-- 成功率: $(( FOUND_COUNT * 100 / TOTAL_PACKAGES ))%
-EOF
+          
+          ## 📊 统计信息
+          
+          - 总软件包数: $TOTAL_PACKAGES
+          - 找到软件包: $FOUND_COUNT
+          - 缺失软件包: $MISSING_COUNT
+          - 成功率: $(( FOUND_COUNT * 100 / TOTAL_PACKAGES ))%
+          EOF
           
           # 输出报告
           echo ""
