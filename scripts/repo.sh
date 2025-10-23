@@ -59,7 +59,7 @@ EOF
 }
 
 # 检查是否在OpenWrt目录
-check_opnwrt_dir() {
+check_openwrt_dir() {
     if [ ! -f "rules.mk" ] || [ ! -d "package" ]; then
         echo -e "${RED}❌ 请在OpenWrt源码目录中运行此脚本${NC}"
         exit 1
@@ -203,6 +203,27 @@ add_default_repo() {
     add_repo "$DEFAULT_REPO_URL" "$DEFAULT_REPO_NAME" "$DEFAULT_REPO_BRANCH"
 }
 
+# 添加其他常用软件源
+add_common_repos() {
+    log_info "添加常用第三方软件源..."
+    
+    # 添加一些常用的软件源
+    local repos=(
+        "https://github.com/Lienol/openwrt-packages lienol-packages main"
+        "https://github.com/pymumu/openwrt-packages pymumu master"
+        "https://github.com/rufengsuixing/luci-app-passwall luci-app-passwall main"
+    )
+    
+    for repo in "${repos[@]}"; do
+        local url=$(echo "$repo" | cut -d' ' -f1)
+        local name=$(echo "$repo" | cut -d' ' -f2)
+        local branch=$(echo "$repo" | cut -d' ' -f3)
+        
+        log_info "添加软件源: $name"
+        add_repo "$url" "$name" "$branch" || log_warning "添加失败: $name"
+    done
+}
+
 # 主函数
 main() {
     local action=""
@@ -238,6 +259,10 @@ main() {
                 param="$2"
                 shift 2
                 ;;
+            --add-common)
+                action="add-common"
+                shift
+                ;;
             *)
                 echo "未知参数: $1"
                 show_help
@@ -247,7 +272,7 @@ main() {
     done
     
     # 检查环境
-    check_opnwrt_dir
+    check_openwrt_dir
     
     # 执行操作
     case $action in
@@ -273,6 +298,9 @@ main() {
             ;;
         install)
             install_repo "$param"
+            ;;
+        add-common)
+            add_common_repos
             ;;
         "")
             # 默认操作：添加默认软件源
