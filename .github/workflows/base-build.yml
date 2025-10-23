@@ -10,15 +10,14 @@ on:
         required: true
         type: string
     outputs:
-      cache-key: ${{ steps.cache-key.outputs.key }}
-      build-path: ${{ steps.cache-key.outputs.path }}
+      cache-key: ${{ jobs.build-base.outputs.cache-key }}
+      build-path: ${{ jobs.build-base.outputs.build-path }}
 
 jobs:
   build-base:
     runs-on: ubuntu-22.04
     outputs:
       cache-key: ${{ steps.cache-key.outputs.key }}
-      cache-hit: ${{ steps.cache.outputs.cache-hit }}
       build-path: ${{ steps.cache-key.outputs.path }}
     steps:
       - name: 🛠️ 初始化环境
