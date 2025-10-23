@@ -152,13 +152,14 @@ jobs:
           # 查找并复制对比脚本
           if [ -f "../scripts/compare-packages.sh" ]; then
             cp ../scripts/compare-packages.sh ./
+            chmod +x compare-packages.sh
           elif [ -f "../.github/scripts/compare-packages.sh" ]; then
             cp ../.github/scripts/compare-packages.sh ./
+            chmod +x compare-packages.sh
           else
             echo "❌ 找不到compare-packages.sh脚本"
             exit 1
           fi
-          chmod +x compare-packages.sh
           
           # 第二阶段：对比基础配置和最终配置
           echo ""
