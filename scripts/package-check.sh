@@ -96,9 +96,9 @@ check_params() {
 
 # 提取LUCI软件包
 extract_luci_packages() {
-    # 修复：使用更可靠的方法提取软件包
+    # 修复：使用更精确的正则表达式提取软件包
     grep "^CONFIG_PACKAGE_luci-" "$CONFIG_FILE" 2>/dev/null | \
-    sed 's/^CONFIG_PACKAGE_luci-\([^=]*\)=\(.*\)/\1=\2/' | \
+    sed -n 's/^CONFIG_PACKAGE_luci-\([^=]*\)=\(.*\)/\1=\2/p' | \
     grep -v '^$' | sort
 }
 
@@ -203,8 +203,14 @@ generate_report_stats() {
 - 总软件包数: $total
 - 找到软件包: $found
 - 缺失软件包: $missing
-- 成功率: $(( found * 100 / total ))%
 EOF
+    
+    # 修复：避免除零错误
+    if [ $total -gt 0 ]; then
+        echo "- 成功率: $(( found * 100 / total ))%" >> "$REPORT_FILE"
+    else
+        echo "- 成功率: 0%" >> "$REPORT_FILE"
+    fi
     
     if [ "$AUTO_FIX" = "true" ] && [ $missing -gt 0 ]; then
         cat >> "$REPORT_FILE" << EOF
