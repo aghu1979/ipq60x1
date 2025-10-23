@@ -133,7 +133,7 @@ jobs:
           echo "📦 最终需要的LUCI软件包总数: $TOTAL_PACKAGES"
           
           # 创建检查报告
-          cat > luci-final-check-${{ inputs.config }}.md << EOF
+          cat > luci-final-check-${{ inputs.config }}.md << 'EOF'
 # 最终LUCI软件包检查报告 - ${{ inputs.config }}
 
 **检查时间**: $(date)  
