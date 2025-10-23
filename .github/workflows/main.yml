@@ -3,9 +3,7 @@ name: OpenWrt Build Scheduler
 on:
   schedule:
     - cron: '0 16 * * 4'  # 北京时间周五0点 (UTC+8)
-  workflow_dispatch:
-  push:
-    branches: [ master ]
+  workflow_dispatch:  # 仅保留手动触发
 
 jobs:
   generate-matrix:
@@ -13,23 +11,48 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       build-time: ${{ steps.time.outputs.time }}
+      chip: ${{ steps.set-matrix.outputs.chip }}
+      branch: ${{ steps.set-matrix.outputs.branch }}
     steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+
       - name: 📦 生成编译矩阵
         id: set-matrix
         run: |
+          # 检查可用的配置文件
+          echo "📋 检查配置文件..."
+          ls -la configs/
+          
+          # 获取可用的芯片配置
+          CHIPS=$(ls configs/base_*.config | sed 's|configs/base_||' | sed 's|.config||' | tr '\n' ' ')
+          echo "可用芯片: $CHIPS"
+          
+          # 获取可用的分支配置
+          BRANCHES=$(ls configs/base_*.config | sed 's|configs/base_||' | sed 's|.config||' | tr '\n' ' ')
+          echo "可用分支: $BRANCHES"
+          
+          # 获取可用的用户配置
+          CONFIGS=$(ls configs/[Pp]ro.config configs/[Mm]ax.config configs/[Uu]ltra.config 2>/dev/null | sed 's|configs/||' | sed 's|.config||' | tr '\n' ' ')
+          echo "可用配置: $CONFIGS"
+          
+          # 生成矩阵
           matrix=$(jq -n -c \
             --argjson chips '["ipq60xx"]' \
             --argjson branches '["openwrt", "immwrt", "libwrt"]' \
             --argjson configs '["Pro", "Max", "Ultra"]' \
             '{
-              chip: $chips,
+              chip: $chips[0],
               branch: $branches,
               config: $configs,
               include: [
-                $chips[] as $chip | $branches[] as $branch | $configs[] as $config | {chip, branch, config}
+                $branches[] as $branch | $configs[] as $config | {chip: $chips[0], branch, config}
               ]
             }')
+          
           echo "matrix=$matrix" >> $GITHUB_OUTPUT
+          echo "chip=${{ matrix.chip }}" >> $GITHUB_OUTPUT
+          echo "branch=${{ matrix.branch }}" >> $GITHUB_OUTPUT
           echo "Generated matrix: $matrix"
 
       - name: ⏰ 记录编译时间
@@ -37,22 +60,33 @@ jobs:
         run: |
           echo "time=$(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
 
-  build:
+  # Job 1: 编译基础系统
+  build-base:
     needs: generate-matrix
+    uses: ./.github/workflows/base-build.yml
+    with:
+      chip: ${{ needs.generate-matrix.outputs.chip }}
+      branch: ${{ needs.generate-matrix.outputs.branch }}
+    secrets: inherit
+
+  # Job 2: 并行编译最终固件
+  build-final:
+    needs: [generate-matrix, build-base]
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    uses: ./.github/workflows/core-build.yml
+    uses: ./.github/workflows/final-build.yml
     with:
       chip: ${{ matrix.chip }}
       branch: ${{ matrix.branch }}
       config: ${{ matrix.config }}
+      base-cache-key: ${{ needs.build-base.outputs.cache-key }}
     secrets: inherit
 
   release:
-    needs: [generate-matrix, build]
+    needs: [generate-matrix, build-final]
     runs-on: ubuntu-latest
-    if: always() && needs.build.result == 'success'
+    if: always() && needs.build-final.result == 'success'
     steps:
       - name: 📥 下载所有产物
         uses: actions/download-artifact@v4
@@ -74,6 +108,8 @@ jobs:
           mkdir -p packages
           find artifacts -name "*.ipk" -type f -exec cp {} packages/ \;
           tar -czf release/packages.tar.gz -C packages .
+          # 复制报告文件
+          find artifacts -name "*.md" -type f -exec cp {} release/ \;
           # 生成文件列表
           ls -la release/ > release/filelist.txt
 
@@ -93,6 +129,7 @@ jobs:
             - `*.manifest`: 软件包清单
             - `config.buildinfo`: 构建信息
             - `packages.tar.gz`: 所有软件包
+            - `*.md`: 详细报告
             
             ## 🔗 快速访问
             - [查看构建日志](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
