@@ -50,7 +50,7 @@ LUCI软件包检查和自动修复脚本
 参数:
   配置文件    OpenWrt配置文件路径
   报告名称    报告文件名前缀 (默认: luci-check)
-  修复模式    是否自动修复 (true/false, 默认: true)
+ 修复模式    是否自动修复 (true/false, 默认: true)
 
 示例:
   $0 .config "基础系统检查" true
@@ -104,7 +104,7 @@ check_packages() {
 **检查时间**: $(date)  
 **配置文件**: $CONFIG_FILE  
 
-ℹ️ 配置文件中没有L�UCI软件包
+ℹ️ 配置文件中没有LUCI软件包
 EOF
         return 0
     fi
@@ -135,7 +135,7 @@ EOF
                 ((FOUND_COUNT++))
             else
                 log_error "$pkg - 缺失"
-                printf '| %s | ❌ 缺失 | - | 需要修复 |\n' "$pkg" >> "$REPORT_FILE"
+                printf '| %s | ❌ 缺失 | - | 需�要修复 |\n' "$pkg" >> "$REPORT_FILE"
                 ((MISSING_COUNT++))
                 MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
             fi
@@ -231,12 +231,12 @@ try_fix_package() {
     fi
     
     # 尝试重新安装feeds
-    log_info "  尝试重新安装feeds..."
+    log_info " 尝试重新安装feeds..."
     if ./scripts/feeds install "$pkg" 2>/dev/null; then
         log_success "  $pkg - 成功安装"
         return 0
     else
-        log_error "  - 无法安装: $pkg"
+        log_error " 修复失败: $pkg"
         return 1
     fi
 }
@@ -253,7 +253,7 @@ generate_report_header() {
 
 ## 📦 软件可用性检查
 
-| 软件包 | 状态 | 位置 | 备注 |
+| 软件 | 状态 | 位置 | 备注 |
 |--------|------|------|------|
 EOF
 }
@@ -283,12 +283,11 @@ EOF
     
     if [ "$AUTO_FIX" = "true" ] && [ $missing -gt 0 ]; then
         cat >> "$REPORT_FILE" << EOF
-
 ## 🔧 自动修复结果
 
 - 尝试修复: $missing
 - 成功修复: $repaired
-- 仍然缺失: $final_missing
+- 保存报告
 EOF
     fi
 }
