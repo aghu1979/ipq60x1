@@ -11,8 +11,6 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       build-time: ${{ steps.time.outputs.time }}
-      chip: ${{ steps.set-matrix.outputs.chip }}
-      branch: ${{ steps.set-matrix.outputs.branch }}
     steps:
       - name: 📥 检出代码
         uses: actions/checkout@v4
@@ -24,35 +22,18 @@ jobs:
           echo "📋 检查配置文件..."
           ls -la configs/
           
-          # 获取可用的芯片配置
-          CHIPS=$(ls configs/base_*.config | sed 's|configs/base_||' | sed 's|.config||' | tr '\n' ' ')
-          echo "可用芯片: $CHIPS"
-          
-          # 获取可用的分支配置
-          BRANCHES=$(ls configs/base_*.config | sed 's|configs/base_||' | sed 's|.config||' | tr '\n' ' ')
-          echo "可用分支: $BRANCHES"
-          
-          # 获取可用的用户配置
-          CONFIGS=$(ls configs/[Pp]ro.config configs/[Mm]ax.config configs/[Uu]ltra.config 2>/dev/null | sed 's|configs/||' | sed 's|.config||' | tr '\n' ' ')
-          echo "可用配置: $CONFIGS"
-          
           # 生成矩阵
           matrix=$(jq -n -c \
             --argjson chips '["ipq60xx"]' \
             --argjson branches '["openwrt", "immwrt", "libwrt"]' \
             --argjson configs '["Pro", "Max", "Ultra"]' \
             '{
-              chip: $chips[0],
-              branch: $branches,
-              config: $configs,
               include: [
-                $branches[] as $branch | $configs[] as $config | {chip: $chips[0], branch, config}
+                $chips[] as $chip | $branches[] as $branch | $configs[] as $config | {chip, branch, config}
               ]
             }')
           
           echo "matrix=$matrix" >> $GITHUB_OUTPUT
-          echo "chip=${{ matrix.chip }}" >> $GITHUB_OUTPUT
-          echo "branch=${{ matrix.branch }}" >> $GITHUB_OUTPUT
           echo "Generated matrix: $matrix"
 
       - name: ⏰ 记录编译时间
@@ -65,8 +46,8 @@ jobs:
     needs: generate-matrix
     uses: ./.github/workflows/base-build.yml
     with:
-      chip: ${{ needs.generate-matrix.outputs.chip }}
-      branch: ${{ needs.generate-matrix.outputs.branch }}
+      chip: ipq60xx  # 直接指定芯片
+      branch: openwrt  # 默认分支，后续会并行编译所有分支
     secrets: inherit
 
   # Job 2: 并行编译最终固件
