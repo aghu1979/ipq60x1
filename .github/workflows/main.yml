@@ -54,41 +54,39 @@ jobs:
       branch: ${{ matrix.branch }}
     secrets: inherit
 
-  # Job 2: 合并所有缓存信息
-  merge-cache-info:
+  # Job 2: 生成缓存映射文件
+  generate-cache-map:
     needs: [generate-matrix, build-base]
     runs-on: ubuntu-latest
     outputs:
-      cache-map: ${{ steps.merge.outputs.cache-map }}
+      cache-map-file: ${{ steps.generate.outputs.filename }}
     steps:
-      - name: 🔗 合并缓存信息
-        id: merge
+      - name: 📝 生成缓存映射文件
+        id: generate
         run: |
-          # 创建一个空的JSON对象
-          CACHE_MAP='{}'
+          # 创建缓存映射文件
+          cat > cache-map.json << EOF
+          {
+            "openwrt": "${{ needs.build-base.outputs['openwrt'].cache-key }}",
+            "immwrt": "${{ needs.build-base.outputs['immwrt'].cache-key }}",
+            "libwrt": "${{ needs.build-base.outputs['libwrt'].cache-key }}"
+          }
+          EOF
           
-          # 合并每个分支的缓存信息
-          # openwrt分支
-          if [ -n "${{ needs.build-base.outputs['openwrt'].cache-info }}" ]; then
-            CACHE_MAP=$(echo "$CACHE_MAP" | jq -c -s '.[0] * .[1]' - <<< "${{ needs.build-base.outputs['openwrt'].cache-info }}")
-          fi
-          
-          # immwrt分支
-          if [ -n "${{ needs.build-base.outputs['immwrt'].cache-info }}" ]; then
-            CACHE_MAP=$(echo "$CACHE_MAP" | jq -c -s '.[0] * .[1]' - <<< "${{ needs.build-base.outputs['immwrt'].cache-info }}")
-          fi
-          
-          # libwrt分支
-          if [ -n "${{ needs.build-base.outputs['libwrt'].cache-info }}" ]; then
-            CACHE_MAP=$(echo "$CACHE_MAP" | jq -c -s '.[0] * .[1]' - <<< "${{ needs.build-base.outputs['libwrt'].cache-info }}")
-          fi
-          
-          echo "cache-map=$CACHE_MAP" >> $GITHUB_OUTPUT
-          echo "📋 合并后的缓存映射: $CACHE_MAP"
+          echo "filename=cache-map.json" >> $GITHUB_OUTPUT
+          echo "📋 缓存映射文件内容:"
+          cat cache-map.json
+
+      - name: 📤 上传缓存映射文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: cache-map-${{ github.run_id }}
+          path: cache-map.json
+          retention-days: 1
 
   # Job 3: 并行编译最终固件
   build-final:
-    needs: [generate-matrix, merge-cache-info]
+    needs: [generate-matrix, generate-cache-map]
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
@@ -97,7 +95,7 @@ jobs:
       chip: ${{ matrix.chip }}
       branch: ${{ matrix.branch }}
       config: ${{ matrix.config }}
-      base-cache-key: ${{ fromJson(needs.merge-cache-info.outputs.cache-map)[matrix.branch]['cache-key'] }}
+      cache-map-name: cache-map-${{ github.run_id }}
     secrets: inherit
 
   release:
