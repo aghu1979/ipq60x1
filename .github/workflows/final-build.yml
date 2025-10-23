@@ -132,19 +132,12 @@ jobs:
           TOTAL_PACKAGES=$(echo "$LUCI_PACKAGES" | wc -l)
           echo "📦 最终需要的LUCI软件包总数: $TOTAL_PACKAGES"
           
-          # 创建检查报告
-          cat > luci-final-check-${{ inputs.config }}.md << 'EOF'
-# 最终LUCI软件包检查报告 - ${{ inputs.config }}
-
-**检查时间**: $(date)  
-**配置**: ${{ inputs.chip }}-${{ inputs.branch }}-${{ inputs.config }}  
-**总软件包数**: $TOTAL_PACKAGES  
-
-## 📦 软件包可用性检查
-
-| 软件包 | 状态 | 位置 | 备注 |
-|--------|------|------|------|
-EOF
+          # 创建检查报告 - 使用printf避免heredoc问题
+          printf '# 最终LUCI软件包检查报告 - %s\n\n**检查时间**: %s\n**配置**: %s-%s-%s\n**总软件包数**: %d\n\n## 📦 软件包可用性检查\n\n| 软件包 | 状态 | 位置 | 备注 |\n|--------|------|------|------|\n' \
+            "${{ inputs.config }}" \
+            "$(date)" \
+            "${{ inputs.chip }}" "${{ inputs.branch }}" "${{ inputs.config }}" \
+            "$TOTAL_PACKAGES" > luci-final-check-${{ inputs.config }}.md
           
           # 检查软件包可用性
           MISSING_COUNT=0
@@ -152,33 +145,26 @@ EOF
           for pkg in $LUCI_PACKAGES; do
             if [ -d "package/feeds/packages/$pkg" ]; then
               echo "✅ $pkg - 可用 (packages)"
-              echo "| $pkg | ✅ 可用 | packages | - |" >> luci-final-check-${{ inputs.config }}.md
+              printf '| %s | ✅ 可用 | packages | - |\n' "$pkg" >> luci-final-check-${{ inputs.config }}.md
               ((FOUND_COUNT++))
             elif [ -d "package/feeds/luci/$pkg" ]; then
               echo "✅ $pkg - 可用 (luci)"
-              echo "| $pkg | ✅ 可用 | luci | - |" >> luci-final-check-${{ inputs.config }}.md
+              printf '| %s | ✅ 可用 | luci | - |\n' "$pkg" >> luci-final-check-${{ inputs.config }}.md
               ((FOUND_COUNT++))
             elif [ -d "package/$pkg" ]; then
               echo "✅ $pkg - 可用 (local)"
-              echo "| $pkg | ✅ 可用 | local | - |" >> luci-final-check-${{ inputs.config }}.md
+              printf '| %s | ✅ 可用 | local | - |\n' "$pkg" >> luci-final-check-${{ inputs.config }}.md
               ((FOUND_COUNT++))
             else
               echo "❌ $pkg - 缺失"
-              echo "| $pkg | ❌ 缺失 | - | 需要修复 |" >> luci-final-check-${{ inputs.config }}.md
+              printf '| %s | ❌ 缺失 | - | 需要修复 |\n' "$pkg" >> luci-final-check-${{ inputs.config }}.md
               ((MISSING_COUNT++))
             fi
           done
           
           # 添加统计信息
-          cat >> luci-final-check-${{ inputs.config }}.md << EOF
-
-## 📊 统计信息
-
-- 总软件包数: $TOTAL_PACKAGES
-- 找到软件包: $FOUND_COUNT
-- 缺失软件包: $MISSING_COUNT
-- 成功率: $(( FOUND_COUNT * 100 / TOTAL_PACKAGES ))%
-EOF
+          printf '\n## 📊 统计信息\n\n- 总软件包数: %d\n- 找到软件包: %d\n- 缺失软件包: %d\n- 成功率: %d%%\n' \
+            "$TOTAL_PACKAGES" "$FOUND_COUNT" "$MISSING_COUNT" "$(( FOUND_COUNT * 100 / TOTAL_PACKAGES ))" >> luci-final-check-${{ inputs.config }}.md
           
           # 输出报告
           echo ""
