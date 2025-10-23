@@ -45,7 +45,7 @@ EOF
 }
 
 # 检查是否在OpenWrt目录
-check_opnwrt_dir() {
+check_openwrt_dir() {
     if [ ! -f "rules.mk" ] || [ ! -d "package" ]; then
         echo -e "${RED}❌ 请在OpenWrt源码目录中运行此脚本${NC}"
         exit 1
@@ -107,7 +107,7 @@ main() {
     log_info "开始OpenWrt系统初始化..."
     
     # 检查环境
-    check_opnwrt_dir
+    check_openwrt_dir
     
     # 执行配置修改
     modify_network_config
