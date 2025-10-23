@@ -122,6 +122,37 @@ jobs:
           
           echo "✅ 用户配置合并完成"
           
+          # 第一次 make defconfig - 补全用户配置的依赖
+          echo ""
+          echo "🔧 第一次 make defconfig - 补全用户配置依赖..."
+          make defconfig
+          echo "📋 合并用户配置后项数: $(grep -c '^CONFIG_' .config)"
+          
+          # 第一次LUCI软件包检查
+          echo ""
+          echo "🔍 ==================== 用户配置LUCI软件包检查 ===================="
+          USER_LUCI=$(grep "^CONFIG_PACKAGE_luci-" .config.user | sed 's/^CONFIG_PACKAGE_\(.*\)=y/\1/' | sort)
+          if [ -n "$USER_LUCI" ]; then
+            echo "📦 用户配置中的LUCI软件包:"
+            echo "$USER_LUCI"
+            
+            # 检查软件包可用性
+            MISSING_USER=""
+            for pkg in $USER_LUCI; do
+              if [ ! -d "package/feeds/packages/$pkg" ] && [ ! -d "package/feeds/luci/$pkg" ] && [ ! -d "package/$pkg" ]; then
+                MISSING_USER="$MISSING_USER $pkg"
+              fi
+            done
+            
+            if [ -n "$MISSING_USER" ]; then
+              echo "⚠️ 用户配置中发现缺失的LUCI软件包:$MISSING_USER"
+            else
+              echo "✅ 用户配置中的所有LUCI软件包都可用"
+            fi
+          else
+            echo "ℹ️ 用户配置中没有LUCI软件包"
+          fi
+          
           # 查找并复制对比脚本
           if [ -f "../scripts/compare-packages.sh" ]; then
             cp ../scripts/compare-packages.sh ./
@@ -139,7 +170,9 @@ jobs:
           echo "对比: 基础配置 → (基础配置 + ${{ inputs.config }}配置)"
           ./compare-packages.sh .config.base .config "最终配置-${{ inputs.config }}"
           
-          # 生成最终配置
+          # 第二次 make defconfig - 确保最终配置完整
+          echo ""
+          echo "🔧 第二次 make defconfig - 确保最终配置完整..."
           make defconfig
           echo "📋 最终配置项数: $(grep -c '^CONFIG_' .config)"
 
@@ -163,6 +196,8 @@ jobs:
           # 检查软件包可用性
           MISSING_COUNT=0
           FOUND_COUNT=0
+          MISSING_PACKAGES=""
+          
           for pkg in $LUCI_PACKAGES; do
             if [ -d "package/feeds/packages/$pkg" ]; then
               echo "✅ $pkg - 可用 (packages)"
@@ -180,6 +215,7 @@ jobs:
               echo "❌ $pkg - 缺失"
               printf '| %s | ❌ 缺失 | - | 需要修复 |\n' "$pkg" >> luci-final-check-${{ inputs.config }}.md
               ((MISSING_COUNT++))
+              MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
             fi
           done
           
@@ -187,24 +223,99 @@ jobs:
           printf '\n## 📊 统计信息\n\n- 总软件包数: %d\n- 找到软件包: %d\n- 缺失软件包: %d\n- 成功率: %d%%\n' \
             "$TOTAL_PACKAGES" "$FOUND_COUNT" "$MISSING_COUNT" "$(( FOUND_COUNT * 100 / TOTAL_PACKAGES ))" >> luci-final-check-${{ inputs.config }}.md
           
-          # 输出报告
-          echo ""
-          echo "📄 最终检查报告:"
-          cat luci-final-check-${{ inputs.config }}.md
-          
           if [ $MISSING_COUNT -gt 0 ]; then
             echo ""
             echo "🚨 发现 $MISSING_COUNT 个缺失的LUCI软件包！"
-            echo "💡 修复建议:"
-            echo "1. 检查软件包名称是否正确"
-            echo "2. 更新第三方软件源"
-            echo "3. 确认软件包在当前分支中可用"
-            echo "4. 检查软件包依赖关系"
-            exit 1
+            echo "📦 缺失列表:$MISSING_PACKAGES"
+            echo ""
+            echo "🔧 尝试自动修复..."
+            
+            # 尝试自动修复
+            REPAIRED_COUNT=0
+            for pkg in $MISSING_PACKAGES; do
+              echo "🔍 修复软件包: $pkg"
+              
+              # 尝试查找相似的软件包名
+              SIMILAR=$(find package/feeds -name "*$(echo $pkg | tr '-' '\n' | head -1)*" -type d 2>/dev/null | head -5)
+              if [ -n "$SIMILAR" ]; then
+                echo "  💡 找到相似的软件包:"
+                echo "$SIMILAR" | sed 's/^/    /'
+              fi
+              
+              # 尝试重新安装feeds
+              echo "  🔄 尝试重新安装feeds..."
+              if ./scripts/feeds install $pkg 2>/dev/null; then
+                echo "  ✅ 成功安装: $pkg"
+                ((REPAIRED_COUNT++))
+              else
+                echo "  ❌ 无法安装: $pkg"
+                
+                # 尝试查找软件包定义
+                PKG_FOUND=$(find . -name "Makefile" -exec grep -l "Package/$pkg" {} \; 2>/dev/null | head -3)
+                if [ -n "$PKG_FOUND" ]; then
+                  echo "  📄 软件包定义位置:"
+                  echo "$PKG_FOUND" | sed 's/^/    /'
+                fi
+              fi
+            done
+            
+            # 第三次 make defconfig - 修复后更新配置
+            if [ $REPAIRED_COUNT -gt 0 ]; then
+              echo ""
+              echo "🔧 第三次 make defconfig - 修复后更新配置..."
+              make defconfig
+              
+              # 最终检查
+              echo ""
+              echo "🔍 ==================== 最终LUCI软件包修复检查 ===================="
+              FINAL_MISSING_COUNT=0
+              for pkg in $MISSING_PACKAGES; do
+                if [ -d "package/feeds/packages/$pkg" ] || [ -d "package/feeds/luci/$pkg" ] || [ -d "package/$pkg" ]; then
+                  echo "✅ $pkg - 已修复"
+                else
+                  echo "❌ $pkg - 仍然缺失"
+                  ((FINAL_MISSING_COUNT++))
+                fi
+              done
+              
+              # 更新报告
+              printf '\n## 🔧 自动修复结果\n\n- 尝试修复: %d\n- 成功修复: %d\n- 仍然缺失: %d\n' \
+                "$MISSING_COUNT" "$REPAIRED_COUNT" "$FINAL_MISSING_COUNT" >> luci-final-check-${{ inputs.config }}.md
+              
+              if [ $FINAL_MISSING_COUNT -gt 0 ]; then
+                echo ""
+                echo "❌ 仍有 $FINAL_MISSING_COUNT 个软件包无法修复"
+                echo "🚨 最终编译将停止，请检查软件包名称或源码"
+                
+                # 列出仍然缺失的软件包
+                echo ""
+                echo "📋 仍然缺失的软件包:"
+                for pkg in $MISSING_PACKAGES; do
+                  if [ ! -d "package/feeds/packages/$pkg" ] && [ ! -d "package/feeds/luci/$pkg" ] && [ ! -d "package/$pkg" ]; then
+                    echo "  - $pkg"
+                  fi
+                done
+                
+                exit 1
+              else
+                echo ""
+                echo "✅ 所有LUCI软件包已成功修复！"
+              fi
+            else
+              echo ""
+              echo "❌ 自动修复失败，无法修复任何软件包"
+              echo "🚨 最终编译将停止"
+              exit 1
+            fi
           else
             echo ""
             echo "✅ 所有 $TOTAL_PACKAGES 个LUCI软件包检查通过！"
           fi
+          
+          # 输出报告
+          echo ""
+          echo "📄 最终检查报告:"
+          cat luci-final-check-${{ inputs.config }}.md
 
       - name: 🚀 编译固件
         id: build
