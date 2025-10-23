@@ -1,111 +1,102 @@
-name: OpenWrt Core Build
+name: OpenWrt Build Scheduler
 
 on:
-  workflow_call:
-    inputs:
-      chip:
-        required: true
-      branch:
-        required: true
-      config:
-        required: true
+  schedule:
+    - cron: '0 16 * * 4'  # 北京时间周五0点 (UTC+8)
+  workflow_dispatch:
+  push:
+    branches: [ master ]
 
 jobs:
-  base-build:
-    runs-on: ubuntu-22.04
+  generate-matrix:
+    runs-on: ubuntu-latest
     outputs:
-      cache-key: ${{ steps.cache-key.outputs.key }}
-      base-path: ${{ steps.cache-key.outputs.path }}
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      build-time: ${{ steps.time.outputs.time }}
     steps:
-      - name: 🛠️ 设置环境
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: 📥 检出代码
-        uses: actions/checkout@v4
-
-      - name: 🔑 生成缓存键
-        id: cache-key
+      - name: 📦 生成编译矩阵
+        id: set-matrix
         run: |
-          KEY="base-${{ inputs.chip }}-${{ inputs.branch }}-${{ hashFiles('.github/configs/base_*.config') }}"
-          echo "key=$KEY" >> $GITHUB_OUTPUT
-          echo "path=base-$KEY" >> $GITHUB_OUTPUT
+          matrix=$(jq -n -c \
+            --argjson chips '["ipq60xx"]' \
+            --argjson branches '["openwrt", "immwrt", "libwrt"]' \
+            --argjson configs '["Pro", "Max", "Ultra"]' \
+            '{
+              chip: $chips,
+              branch: $branches,
+              config: $configs,
+              include: [
+                $chips[] as $chip | $branches[] as $branch | $configs[] as $config | {chip, branch, config}
+              ]
+            }')
+          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+          echo "Generated matrix: $matrix"
 
-      - name: 📦 恢复基础环境缓存
-        uses: actions/cache@v4
-        id: cache
-        with:
-          path: ${{ steps.cache-key.outputs.path }}
-          key: ${{ steps.cache-key.outputs.key }}
-
-      - name: 🌱 准备基础环境
-        if: steps.cache.outputs.cache-hit != 'true'
+      - name: ⏰ 记录编译时间
+        id: time
         run: |
-          mkdir -p ${{ steps.cache-key.outputs.path }}
-          docker run --rm \
-            -v $(pwd):/work \
-            -w /work \
-            openwrt/org:ubuntu-22.04 \
-            bash -c "
-              ./scripts/prepare-env.sh ${{ inputs.chip }} ${{ inputs.branch }}
-              make defconfig
-              make -j$(nproc) IGNORE_ERRORS=1
-              tar -czf ${{ steps.cache-key.outputs.path }}/base.tar.gz .
-            "
+          echo "time=$(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
 
-  final-build:
-    needs: base-build
-    runs-on: ubuntu-22.04
+  build:
+    needs: generate-matrix
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    uses: ./.github/workflows/core-build.yml
+    with:
+      chip: ${{ matrix.chip }}
+      branch: ${{ matrix.branch }}
+      config: ${{ matrix.config }}
+    secrets: inherit
+
+  release:
+    needs: [generate-matrix, build]
+    runs-on: ubuntu-latest
+    if: always() && needs.build.result == 'success'
     steps:
-      - name: 📥 检出代码
-        uses: actions/checkout@v4
+      - name: 📥 下载所有产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-${{ github.run_id }}-*"
+          merge-multiple: true
+          path: artifacts
 
-      - name: 📦 恢复基础环境
+      - name: 📦 整理发布文件
         run: |
-          mkdir -p base
-          tar -xzf ${{ needs.base-build.outputs.base-path }}/base.tar.gz -C base
-
-      - name: 🔧 合并配置文件
-        run: |
-          ./scripts/merge-config.sh \
-            base/.config \
-            .github/configs/${{ inputs.config }}.config \
-            .config
-
-      - name: 🧪 检查软件包
-        run: |
-          ./scripts/package-check.sh .config
-
-      - name: 🚀 编译固件
-        run: |
-          docker run --rm \
-            -v $(pwd):/work \
-            -w /work/base \
-            openwrt/org:ubuntu-22.04 \
-            bash -c "
-              cp ../.config .config
-              make defconfig
-              make -j$(nproc) IGNORE_ERRORS=1
-            "
-
-      - name: 📦 收集产物
-        run: |
+          mkdir -p release
+          # 复制所有固件文件
+          find artifacts -name "*.bin" -type f -exec cp {} release/ \;
+          # 复制配置文件
+          find artifacts -name "*.config" -type f -exec cp {} release/ \;
+          find artifacts -name "*.manifest" -type f -exec cp {} release/ \;
+          find artifacts -name "config.buildinfo" -type f -exec cp {} release/ \;
+          # 合并所有软件包
           mkdir -p packages
-          find base/bin/targets -name "*.bin" -exec cp {} ./ \;
-          find base/bin/targets -name "*.manifest" -exec cp {} ./ \;
-          find base/bin/targets -name "config.buildinfo" -exec cp {} ./ \;
-          cp base/.config .config
-          cp -r base/bin/packages packages/
+          find artifacts -name "*.ipk" -type f -exec cp {} packages/ \;
+          tar -czf release/packages.tar.gz -C packages .
+          # 生成文件列表
+          ls -la release/ > release/filelist.txt
 
-      - name: 📤 上传产物
-        uses: actions/upload-artifact@v4
+      - name: 🚀 发布到Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: ${{ inputs.chip }}-${{ inputs.branch }}-${{ inputs.config }}-${{ github.run_id }}
-          path: |
-            *.bin
-            *.config
-            *.manifest
-            config.buildinfo
-            packages/
-          retention-days: 7
+          tag_name: build-${{ github.run_number }}
+          name: OpenWrt Build ${{ github.run_number }}
+          body: |
+            ## 📅 编译信息
+            - **编译时间**: ${{ needs.generate-matrix.outputs.build-time }}
+            - **编译任务**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            ## 📦 产物说明
+            - `*.bin`: 固件文件
+            - `*.config`: 编译配置
+            - `*.manifest`: 软件包清单
+            - `config.buildinfo`: 构建信息
+            - `packages.tar.gz`: 所有软件包
+            
+            ## 🔗 快速访问
+            - [查看构建日志](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            - [下载所有产物](${{ github.server_url }}/${{ github.repository }}/releases/download/build-${{ github.run_number }}/)
+          files: release/*
+          draft: false
+          prerelease: false
