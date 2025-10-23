@@ -1,6 +1,23 @@
 name: Build Core System
 
 on:
+  workflow_call:
+    inputs:
+      build_all:
+        description: '是否编译所有组合'
+        required: true
+        default: true
+        type: boolean
+      chip:
+        description: '芯片型号（当build_all为false时生效）'
+        required: false
+        default: 'ipq60xx'
+        type: string
+      branch:
+        description: '源码分支（当build_all为false时生效）'
+        required: false
+        default: 'openwrt'
+        type: string
   workflow_dispatch:
     inputs:
       build_all:
