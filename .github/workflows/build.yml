@@ -78,12 +78,12 @@ jobs:
           
           # 获取基础配置列表并转换为JSON格式
           BASE_CONFIGS=$(ls configs/base_*.config 2>/dev/null | xargs -n 1 basename | sed 's/.config$//' | tr '\n' ' ')
-          # 修复JSON格式问题：正确处理空列表和单个元素
+          # 修复JSON格式问题：转换为单行JSON
           if [ -z "$BASE_CONFIGS" ]; then
             BASE_CONFIGS_JSON="[]"
           else
-            # 将空格分隔的列表转换为JSON数组
-            BASE_CONFIGS_JSON=$(echo "$BASE_CONFIGS" | jq -R 'split(" ") | map(select(length > 0))')
+            # 将空格分隔的列表转换为单行JSON数组
+            BASE_CONFIGS_JSON=$(echo "$BASE_CONFIGS" | jq -R 'split(" ") | map(select(length > 0))' | jq -c '.')
           fi
           echo "base_configs_json=$BASE_CONFIGS_JSON" >> $GITHUB_OUTPUT
           
@@ -92,7 +92,7 @@ jobs:
           if [ -z "$USER_CONFIGS" ]; then
             USER_CONFIGS_JSON="[]"
           else
-            USER_CONFIGS_JSON=$(echo "$USER_CONFIGS" | jq -R 'split(" ") | map(select(length > 0))')
+            USER_CONFIGS_JSON=$(echo "$USER_CONFIGS" | jq -R 'split(" ") | map(select(length > 0))' | jq -c '.')
           fi
           echo "user_configs_json=$USER_CONFIGS_JSON" >> $GITHUB_OUTPUT
           
@@ -101,7 +101,7 @@ jobs:
           if [ -z "$DEVICE_LIST" ]; then
             DEVICE_LIST_JSON="[]"
           else
-            DEVICE_LIST_JSON=$(echo "$DEVICE_LIST" | jq -R 'split(" ") | map(select(length > 0))')
+            DEVICE_LIST_JSON=$(echo "$DEVICE_LIST" | jq -R 'split(" ") | map(select(length > 0))' | jq -c '.')
           fi
           echo "device_list=$DEVICE_LIST" >> $GITHUB_OUTPUT
           echo "device_list_json=$DEVICE_LIST_JSON" >> $GITHUB_OUTPUT
@@ -113,7 +113,7 @@ jobs:
           echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 设备列表: $DEVICE_LIST${{ env.COLOR_RESET }}"
           echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 缓存键: $CACHE_KEY${{ env.COLOR_RESET }}"
           
-          # 输出JSON格式
+          # 输出JSON格式（用于调试）
           echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 基础配置JSON: $BASE_CONFIGS_JSON${{ env.COLOR_RESET }}"
           echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 用户配置JSON: $USER_CONFIGS_JSON${{ env.COLOR_RESET }}"
           echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 设备列表JSON: $DEVICE_LIST_JSON${{ env.COLOR_RESET }}"
@@ -377,191 +377,4 @@ jobs:
 
       - name: Build Firmware
         run: |
-          # 输出开始信息
-          echo -e "${{ env.COLOR_CYAN }}${{ env.ICON_START }} 开始编译固件${{ env.COLOR_RESET }}"
-          echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 目标设备: ${{ matrix.device }}${{ env.COLOR_RESET }}"
-          echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 基础配置: ${{ matrix.base_config }}${{ env.COLOR_RESET }}"
-          echo -e "${{ env.COLOR_BLUE }}${{ env.ICON_INFO }} 用户配置: ${{ matrix.user_config }}${{ env.COLOR_RESET }}"
-          
-          # 进入源代码目录
-          cd openwrt
-          
-          # 编译固件
-          make -j$(nproc) || {
-            echo -e "${{ env.COLOR_RED }}${{ env.ICON_ERROR }} 固件编译失败${{ env.COLOR_RESET }}"
-            echo -e "${{ env.COLOR_YELLOW }}${{ env.ICON_WARNING }} 尝试单线程编译${{ env.COLOR_RESET }}"
-            make -j1 V=s || {
-              echo -e "${{ env.COLOR_RED }}${{ env.ICON_ERROR }} 单线程编译也失败${{ env.COLOR_RESET }}"
-              exit 1
-            }
-          }
-          
-          # 输出结束信息
-          echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 固件编译完成${{ env.COLOR_RESET }}"
-
-      - name: Organize Files
-        run: |
-          # 输出开始信息
-          echo -e "${{ env.COLOR_CYAN }}${{ env.ICON_PACKAGE }} 开始整理文件${{ env.COLOR_RESET }}"
-          
-          # 创建临时目录
-          mkdir -p ../temp_artifacts/${{ matrix.device }}-${{ matrix.user_config }}
-          
-          # 进入源代码目录
-          cd openwrt
-          
-          # 获取分支缩写
-          BRANCH_ABBR=$(echo $REPO_URL | awk -F '/' '{print $NF}' | sed 's/immortalwrt/immwrt/g' | sed 's/openwrt/openwrt/g' | sed 's/libwrt/libwrt/g')
-          
-          # 获取芯片变量
-          CHIP_VAR=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
-          
-          # 复制并重命名固件文件
-          for bin in bin/targets/*/*/*.bin; do
-            if [[ $bin == *factory.bin ]]; then
-              cp $bin ../temp_artifacts/${{ matrix.device }}-${{ matrix.user_config }}/${BRANCH_ABBR}-${CHIP_VAR}-${{ matrix.device }}-factory-${{ matrix.user_config }}.bin
-            elif [[ $bin == *sysupgrade.bin ]]; then
-              cp $bin ../temp_artifacts/${{ matrix.device }}-${{ matrix.user_config }}/${BRANCH_ABBR}-${CHIP_VAR}-${{ matrix.device }}-sysupgrade-${{ matrix.user_config }}.bin
-            fi
-          done
-          
-          # 复制并重命名配置文件
-          cp .config ../temp_artifacts/${{ matrix.device }}-${{ matrix.user_config }}/${BRANCH_ABBR}-${CHIP_VAR}-${{ matrix.device }}-${{ matrix.user_config }}.config
-          
-          # 复制并重命名manifest文件
-          cp bin/targets/*/*/*.manifest ../temp_artifacts/${{ matrix.device }}-${{ matrix.user_config }}/${BRANCH_ABBR}-${CHIP_VAR}-${{ matrix.device }}-${{ matrix.user_config }}.manifest
-          
-          # 复制并重命名buildinfo文件
-          cp bin/targets/*/*/config.buildinfo ../temp_artifacts/${{ matrix.device }}-${{ matrix.user_config }}/${BRANCH_ABBR}-${CHIP_VAR}-${{ matrix.device }}-${{ matrix.user_config }}.config.buildinfo
-          
-          # 复制软件包
-          mkdir -p ../temp_artifacts/packages-${{ matrix.user_config }}
-          find bin/packages -name "*.ipk" -o -name "*.apk" | xargs -I {} cp {} ../temp_artifacts/packages-${{ matrix.user_config }}/
-          
-          # 输出结束信息
-          echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 文件整理完成${{ env.COLOR_RESET }}"
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.device }}-${{ matrix.user_config }}
-          path: temp_artifacts/${{ matrix.device }}-${{ matrix.user_config }}/
-          retention-days: 7
-
-  # 发布阶段
-  release:
-    needs: [setup, build-configs]
-    runs-on: ${{ inputs.ubuntu_version || 'ubuntu-22.04' }}
-    # 只有当编译成功或有编译任务时才执行
-    if: always() && (needs.build-configs.result == 'success' || needs.build-configs.result == 'skipped')
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download All Artifacts
-        # 只有当有编译任务时才下载artifacts
-        if: needs.build-configs.result == 'success'
-        uses: actions/download-artifact@v4
-        with:
-          path: all_artifacts
-
-      - name: Organize Release Files
-        # 只有当有artifacts时才整理文件
-        if: needs.build-configs.result == 'success'
-        run: |
-          # 输出开始信息
-          echo -e "${{ env.COLOR_CYAN }}${{ env.ICON_PACKAGE }} 开始整理发布文件${{ env.COLOR_RESET }}"
-          
-          # 创建发布目录
-          mkdir -p release_files
-          
-          # 获取芯片变量
-          CHIP_VAR="${{ needs.setup.outputs.target_arch }}"
-          
-          # 合并所有配置文件
-          mkdir -p release_files/${CHIP_VAR}-config
-          find all_artifacts -name "*.config" -exec cp {} release_files/${CHIP_VAR}-config/ \;
-          cd release_files/${CHIP_VAR}-config
-          tar -zcf ../${CHIP_VAR}-config.tar.gz .
-          cd -
-          
-          # 合并所有manifest文件
-          mkdir -p release_files/${CHIP_VAR}-manifest
-          find all_artifacts -name "*.manifest" -exec cp {} release_files/${CHIP_VAR}-manifest/ \;
-          cd release_files/${CHIP_VAR}-manifest
-          tar -zcf ../${CHIP_VAR}-manifest.tar.gz .
-          cd -
-          
-          # 合并所有buildinfo文件
-          mkdir -p release_files/${CHIP_VAR}-buildinfo
-          find all_artifacts -name "*.config.buildinfo" -exec cp {} release_files/${CHIP_VAR}-buildinfo/ \;
-          cd release_files/${CHIP_VAR}-buildinfo
-          tar -zcf ../${CHIP_VAR}-buildinfo.tar.gz .
-          cd -
-          
-          # 合并所有软件包
-          mkdir -p release_files/${CHIP_VAR}-packages
-          find all_artifacts -name "*.ipk" -o -name "*.apk" | xargs -I {} cp {} release_files/${CHIP_VAR}-packages/
-          cd release_files/${CHIP_VAR}-packages
-          tar -zcf ../${CHIP_VAR}-packages.tar.gz .
-          cd -
-          
-          # 复制所有固件文件
-          find all_artifacts -name "*.bin" -exec cp {} release_files/ \;
-          
-          # 创建发布信息
-          cat > release_files/README.md << EOF
-          # OpenWrt 固件发布
-          
-          ## 📒 固件信息
-          - 🌐 默认地址: **192.168.111.1**
-          - 🔑 默认密码: none
-          - 🖥️ 机器名: WRT
-          
-          ## 📦 文件说明
-          - \`${CHIP_VAR}-config.tar.gz\`: 所有配置文件
-          - \`${CHIP_VAR}-manifest.tar.gz\`: 所有软件包清单
-          - \`${CHIP_VAR}-buildinfo.tar.gz\`: 所有构建信息
-          - \`${CHIP_VAR}-packages.tar.gz\`: 所有软件包
-          - \*.bin: 固件文件
-          
-          ## 🔧 固件命名规则
-          - 格式: 分支缩写-芯片变量-设备名称-类型-配置.bin
-          - 示例: immwrt-ipq60xx-jdcloud_re-ss-01-sysupgrade-Pro.bin
-          
-          ## 📝 编译信息
-          - 编译时间: $(date +"%Y-%m-%d %H:%M:%S")
-          - 源码地址: $REPO_URL
-          - 源码分支: $REPO_BRANCH
-          EOF
-          
-          # 输出结束信息
-          echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 发布文件整理完成${{ env.COLOR_RESET }}"
-
-      - name: Create Release
-        # 只有当有artifacts时才创建release
-        if: needs.build-configs.result == 'success'
-        uses: ncipollo/release-action@v1
-        with:
-          name: OpenWrt 固件发布 - $(date +"%Y.%m.%d")
-          tag: openwrt-$(date +"%Y%m%d")
-          artifacts: release_files/*
-          bodyFile: release_files/README.md
-          allowUpdates: true
-          token: ${{ secrets.GITHUB_TOKEN }}
-          draft: false
-
-      - name: Cleanup
-        run: |
-          # 输出开始信息
-          echo -e "${{ env.COLOR_CYAN }}${{ env.ICON_START }} 开始清理${{ env.COLOR_RESET }}"
-          
-          # 删除旧缓存
-          gh cache list --key ${{ needs.setup.outputs.cache_key }}- --json key --jq '.[] | .key' | while read -r key; do
-            gh cache delete "$key"
-          done
-          
-          # 输出结束信息
-          echo -e "${{ env.COLOR_GREEN }}${{ env.ICON_SUCCESS }} 清理完成${{ env.COLOR_RESET }}"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          #
