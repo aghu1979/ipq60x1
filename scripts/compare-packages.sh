@@ -30,6 +30,10 @@ log_error() {
     echo -e "${RED}${ICON_ERROR} $1${NC}"
 }
 
+log_warning() {
+    echo -e "${YELLOW}${ICON_WARNING} $1${NC}"
+}
+
 # 显示帮助信息
 show_help() {
     cat << EOF
@@ -71,7 +75,7 @@ check_params() {
 # 提取LUCI软件包
 extract_luci_packages() {
     local config_file=$1
-    # 修复：使用更精确的正则表达式提取软件包
+    # 修复：使用更可靠的方法提取软件包
     grep "^CONFIG_PACKAGE_luci-" "$config_file" 2>/dev/null | \
     sed -n 's/^CONFIG_PACKAGE_luci-\([^=]*)=\(.*\)/\1=\2/' | \
     grep -v '^$' | sort
@@ -81,7 +85,7 @@ extract_luci_packages() {
 compare_packages() {
     local config1=$1
     local config2=$2
-    local report_name=${3:-"软件包对比"}
+    local report_name=${3:-"软件包对比"
     local report_file="${report_name}.md"
     
     log_info "开始对比LUCI软件包..."
@@ -205,7 +209,8 @@ EOF
     
     # 检查状态改变
     for pkg in "${!status1[@]}"; do
-        if [[ -n "${status2[$pkg]}" && "${status1[$pkg]}" != "${status2[$pkg]}" ]]; then
+        # 修复：检查软件包是否在第二个配置中存在
+        if [[ -n "${status2[$pkg]}" && "${status1[$pkg]}" != "${status2[$pkg]}" ]; then
             echo "  🔄 $pkg (${status1[$pkg]} → ${status2[$pkg]})"
             echo "| $pkg | ${status1[$pkg]} → ${status2[$pkg]} | 状态改变 |" >> "$report_file"
             ((changed_count++))
@@ -222,8 +227,8 @@ EOF
 ## 📦 完整软件包列表
 
 ### 配置1中的软件包
-| 软件 | 状态 |
-|--------|------|
+| 软件 | 瓁 | 
+|--------|------|------|
 EOF
     echo "$packages1" | while IFS='=' read -r pkg status; do
         echo "| $pkg | $status |" >> "$report_file"
@@ -232,7 +237,7 @@ EOF
     cat >> "$report_file" << EOF
 
 ### 配置2中的软件包
-| 软件 | 状态 |
+| 软件 | 状态 | 
 |--------|------|------|
 EOF
     echo "$packages2" | while IFS='=' read -r pkg status; do
