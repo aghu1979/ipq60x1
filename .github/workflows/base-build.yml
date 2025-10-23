@@ -305,12 +305,32 @@ jobs:
 
       - name: 📤 上传基础系统报告
         if: always()
+        run: |
+          echo "📋 检查报告文件..."
+          ls -la *.md 2>/dev/null || echo "没有找到报告文件"
+          
+          # 创建临时目录用于上传
+          mkdir -p upload-reports
+          
+          # 复制所有可能的报告文件
+          for report in luci-packages-基础系统-${{ inputs.branch }}.md 基础系统-初步检查.md 基础系统.md; do
+            if [ -f "$report" ]; then
+              cp "$report" upload-reports/
+              echo "✅ 找到报告文件: $report"
+            else
+              echo "⚠️ 报告文件不存在: $report"
+            fi
+          done
+          
+          # 显示上传目录内容
+          echo "📋 上传目录内容:"
+          ls -la upload-reports/
+
+      - name: 📤 上传基础系统报告
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: base-report-${{ inputs.branch }}-${{ github.run_id }}
-          path: |
-            luci-packages-基础系统-${{ inputs.branch }}.md
-            基础系统-初步检查.md
-            基础系统.md
+          path: upload-reports/
           retention-days: 7
           if-no-files-found: warn
