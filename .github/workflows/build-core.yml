@@ -1,0 +1,89 @@
+name: Build Core System
+
+on:
+  workflow_dispatch:
+    inputs:
+      chip:
+        description: '芯片型号'
+        required: true
+        default: 'ipq60xx'
+        type: choice
+        options:
+          - ipq60xx
+          - ipq80xx
+      branch:
+        description: '源码分支'
+        required: true
+        default: 'openwrt'
+        type: choice
+        options:
+          - openwrt
+          - immwrt
+          - libwrt
+
+jobs:
+  build-core:
+    runs-on: ubuntu-22.04
+    outputs:
+      core-cache-key: ${{ steps.cache.outputs.cache-hit }}
+      build-path: ${{ steps.setup.outputs.build-path }}
+      cache-key: ${{ steps.setup.outputs.cache-key }}
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+
+      - name: 🔧 设置环境
+        id: setup
+        run: |
+          # 安装依赖
+          sudo apt-get update
+          sudo apt-get install -y jq curl build-essential
+          
+          # 设置变量
+          CHIP="${{ inputs.chip }}"
+          BRANCH="${{ inputs.branch }}"
+          BUILD_PATH="core-build-${CHIP}-${BRANCH}"
+          
+          # 生成缓存键
+          CHIP_HASH=$(sha256sum "configs/base_${CHIP}.config" | cut -d' ' -f1)
+          BRANCH_HASH=$(sha256sum "configs/base_${BRANCH}.config" | cut -d' ' -f1)
+          CACHE_KEY="core-${CHIP}-${BRANCH}-${CHIP_HASH:0:8}-${BRANCH_HASH:0:8}"
+          
+          # 输出变量
+          echo "build-path=$BUILD_PATH" >> $GITHUB_OUTPUT
+          echo "cache-key=$CACHE_KEY" >> $GITHUB_OUTPUT
+          echo "chip=$CHIP" >> $GITHUB_OUTPUT
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+          
+          echo "✅ 环境设置完成"
+          echo "  - 芯片: $CHIP"
+          echo "  - 分支: $BRANCH"
+          echo "  - 构建路径: $BUILD_PATH"
+          echo "  - 缓存键: $CACHE_KEY"
+
+      - name: 📦 检查缓存
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.setup.outputs.build-path }}
+          key: ${{ steps.setup.outputs.cache-key }}
+          restore-keys: |
+            core-${{ inputs.chip }}-${{ inputs.branch }}-
+
+      - name: 🌱 编译核心系统
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          # 执行核心编译脚本
+          chmod +x scripts/build-core.sh
+          ./scripts/build-core.sh \
+            --chip "${{ steps.setup.outputs.chip }}" \
+            --branch "${{ steps.setup.outputs.branch }}" \
+            --path "${{ steps.setup.outputs.build-path }}"
+
+      - name: 📤 上传核心系统
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-${{ inputs.chip }}-${{ inputs.branch }}-${{ github.run_id }}
+          path: ${{ steps.setup.outputs.build-path }}
+          retention-days: 7
