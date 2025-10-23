@@ -39,7 +39,7 @@ env:
   UPLOAD_RELEASE: false
   TZ: Asia/Shanghai
   PRODUCT_NAME: OpenWrt
-  FIRMWARE_NAME: ${{ env.CONFIG_FILE }}
+  FIRMWARE_NAME: ${{ github.event.inputs.config || 'libwrt' }}
 
 jobs:
   build:
@@ -149,7 +149,7 @@ jobs:
     - name: Set base cache key for final build
       id: cache_key
       run: |
-        BASE_CACHE_KEY="${{ env.CONFIG_FILE }}-ipq60xx-${{ env.FIRMWARE_NAME }}-${{ github.run_id }}"
+        BASE_CACHE_KEY="${CONFIG_FILE}-ipq60xx-${FIRMWARE_NAME}-${{ github.run_id }}"
         echo "base_cache_key=$BASE_CACHE_KEY" >> $GITHUB_OUTPUT
         echo "📌 生成的缓存键: $BASE_CACHE_KEY"
 
