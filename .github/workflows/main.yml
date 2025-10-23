@@ -1,0 +1,71 @@
+name: OpenWrt Build Scheduler
+
+on:
+  schedule:
+    - cron: '0 16 * * 4'  # 北京时间周五0点 (UTC+8)
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: 📦 生成编译矩阵
+        id: set-matrix
+        run: |
+          matrix=$(jq -n -c \
+            --argjson chips '["ipq60xx"]' \
+            --argjson branches '["openwrt", "immwrt", "libwrt"]' \
+            --argjson configs '["Pro", "Max", "Ultra"]' \
+            '{
+              chip: $chips,
+              branch: $branches,
+              config: $configs,
+              include: [
+                $chips[] as $chip | $branches[] as $branch | $configs[] as $config | {chip, branch, config}
+              ]
+            }')
+          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+
+  build:
+    needs: generate-matrix
+    uses: ./.github/workflows/core-build.yml
+    with:
+      chip: ${{ matrix.chip }}
+      branch: ${{ matrix.branch }}
+      config: ${{ matrix.config }}
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 下载所有产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-${{ needs.build.outputs.run-id }}-*"
+          merge-multiple: true
+
+      - name: 📦 打包发布文件
+        run: |
+          mkdir -p release
+          find . -name "*.bin" -exec cp {} release/ \;
+          find . -name "*.config" -exec cp {} release/ \;
+          find . -name "*.manifest" -exec cp {} release/ \;
+          find . -name "config.buildinfo" -exec cp {} release/ \;
+          tar -czf release/packages.tar.gz packages/
+
+      - name: 🚀 发布到Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ needs.build.outputs.run-id }}
+          files: release/*
+          body: |
+            📅 编译时间: ${{ needs.build.outputs.build-time }}
+            🔗 详细日志: [查看构建日志](https://github.com/${{ github.repository }}/actions/runs/${{ needs.build.outputs.run-id }})
