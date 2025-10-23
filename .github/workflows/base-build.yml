@@ -303,6 +303,37 @@ jobs:
           tar -czf ${{ steps.cache-key.outputs.path }}/base.tar.gz -C openwrt-src .
           echo "✅ 基础环境准备完成"
 
+      - name: 📋 处理缓存命中的报告
+        if: steps.cache.outputs.cache-hit == 'true'
+        run: |
+          echo "📋 缓存命中，从缓存中提取报告文件..."
+          
+          # 解压缓存中的报告文件
+          BUILD_PATH="${{ steps.cache-key.outputs.path }}"
+          if [ -f "$BUILD_PATH/base.tar.gz" ]; then
+            echo "📦 解压缓存文件..."
+            mkdir -p temp-extract
+            tar -xzf "$BUILD_PATH/base.tar.gz" -C temp-extract
+            
+            # 查找并复制报告文件
+            if [ -f "temp-extract/基础系统-最终检查.md" ]; then
+              cp temp-extract/基础系统-最终检查.md luci-packages-基础系统-${{ inputs.branch }}.md
+              echo "✅ 已提取最终检查报告"
+            fi
+            
+            for report in 基础系统-初步检查.md 基础系统.md; do
+              if [ -f "temp-extract/$report" ]; then
+                cp "temp-extract/$report" .
+                echo "✅ 已提取报告: $report"
+              fi
+            done
+            
+            # 清理临时目录
+            rm -rf temp-extract
+          else
+            echo "❌ 缓存中没有找到base.tar.gz文件"
+          fi
+
       - name: 📤 上传基础系统报告
         if: always()
         run: |
