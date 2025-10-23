@@ -72,9 +72,9 @@ check_params() {
 # 提取LUCI软件包
 extract_luci_packages() {
     local config_file=$1
-    # 修复：使用更可靠的方法提取软件包
+    # 修复：使用更精确的正则表达式提取软件包
     grep "^CONFIG_PACKAGE_luci-" "$config_file" 2>/dev/null | \
-    sed 's/^CONFIG_PACKAGE_luci-\([^=]*\)=\(.*\)/\1=\2/' | \
+    sed -n 's/^CONFIG_PACKAGE_luci-\([^=]*\)=\(.*\)/\1=\2/p' | \
     grep -v '^$' | sort
 }
 
@@ -127,7 +127,13 @@ compare_packages() {
 |------|-----------|
 | 配置1 | $total1 |
 | 配置2 | $total2 |
-| 差异 | $((total2 - total1)) |
+EOF
+    
+    # 修复：避免语法错误
+    local diff=$((total2 - total1))
+    echo "| 差异 | $diff |" >> "$report_file"
+    
+    cat >> "$report_file" << EOF
 
 ## 📋 软件包详细对比
 
