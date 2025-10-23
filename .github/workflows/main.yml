@@ -1,0 +1,102 @@
+name: OpenWrt Build Scheduler
+
+on:
+  schedule:
+    - cron: '0 16 * * 4'  # 北京时间周五0点 (UTC+8)
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      build-time: ${{ steps.time.outputs.time }}
+    steps:
+      - name: 📦 生成编译矩阵
+        id: set-matrix
+        run: |
+          matrix=$(jq -n -c \
+            --argjson chips '["ipq60xx"]' \
+            --argjson branches '["openwrt", "immwrt", "libwrt"]' \
+            --argjson configs '["Pro", "Max", "Ultra"]' \
+            '{
+              chip: $chips,
+              branch: $branches,
+              config: $configs,
+              include: [
+                $chips[] as $chip | $branches[] as $branch | $configs[] as $config | {chip, branch, config}
+              ]
+            }')
+          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+          echo "Generated matrix: $matrix"
+
+      - name: ⏰ 记录编译时间
+        id: time
+        run: |
+          echo "time=$(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+
+  build:
+    needs: generate-matrix
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    uses: ./.github/workflows/core-build.yml
+    with:
+      chip: ${{ matrix.chip }}
+      branch: ${{ matrix.branch }}
+      config: ${{ matrix.config }}
+    secrets: inherit
+
+  release:
+    needs: [generate-matrix, build]
+    runs-on: ubuntu-latest
+    if: always() && needs.build.result == 'success'
+    steps:
+      - name: 📥 下载所有产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-${{ github.run_id }}-*"
+          merge-multiple: true
+          path: artifacts
+
+      - name: 📦 整理发布文件
+        run: |
+          mkdir -p release
+          # 复制所有固件文件
+          find artifacts -name "*.bin" -type f -exec cp {} release/ \;
+          # 复制配置文件
+          find artifacts -name "*.config" -type f -exec cp {} release/ \;
+          find artifacts -name "*.manifest" -type f -exec cp {} release/ \;
+          find artifacts -name "config.buildinfo" -type f -exec cp {} release/ \;
+          # 合并所有软件包
+          mkdir -p packages
+          find artifacts -name "*.ipk" -type f -exec cp {} packages/ \;
+          tar -czf release/packages.tar.gz -C packages .
+          # 生成文件列表
+          ls -la release/ > release/filelist.txt
+
+      - name: 🚀 发布到Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: OpenWrt Build ${{ github.run_number }}
+          body: |
+            ## 📅 编译信息
+            - **编译时间**: ${{ needs.generate-matrix.outputs.build-time }}
+            - **编译任务**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            ## 📦 产物说明
+            - `*.bin`: 固件文件
+            - `*.config`: 编译配置
+            - `*.manifest`: 软件包清单
+            - `config.buildinfo`: 构建信息
+            - `packages.tar.gz`: 所有软件包
+            
+            ## 🔗 快速访问
+            - [查看构建日志](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            - [下载所有产物](${{ github.server_url }}/${{ github.repository }}/releases/download/build-${{ github.run_number }}/)
+          files: release/*
+          draft: false
+          prerelease: false
