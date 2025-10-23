@@ -113,7 +113,7 @@ jobs:
           restore-keys: |
             base-${{ inputs.chip }}-${{ inputs.branch }}-
 
-      - name: 🌱 准备基础环境
+      - name: 🌱� 准备基础环境
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           echo "🔧 准备基础编译环境..."
