@@ -46,8 +46,8 @@ jobs:
           find . -name "base_*.config" -type f 2>/dev/null
           echo ""
           echo "📋 输入参数:"
-          echo "  - chip: ${{ inputs.chip }}"
-          echo "  - branch: ${{ inputs.branch }}"
+          echo "  - chip: '${{ inputs.chip }}'"
+          echo "  - branch: '${{ inputs.branch }}'"
 
       - name: 🔑 生成缓存键
         id: cache-key
@@ -151,31 +151,58 @@ jobs:
           # 进入源码目录
           cd openwrt-src
           echo "📌 进入源码目录: $(pwd)"
+          echo "📌 上级目录内容:"
+          ls -la ../
+          
+          # 修正配置文件路径（相对于openwrt-src目录）
+          CHIP_CONFIG_REL="../${{ steps.cache-key.outputs.chip-config }}"
+          BRANCH_CONFIG_REL="../${{ steps.cache-key.outputs.branch-config }}"
+          
+          echo "📋 相对路径:"
+          echo "  - 芯片配置: $CHIP_CONFIG_REL"
+          echo "  - 分支配置: $BRANCH_CONFIG_REL"
+          
+          # 检查文件是否存在
+          if [ ! -f "$CHIP_CONFIG_REL" ]; then
+            echo "❌ 芯片配置文件不存在: $CHIP_CONFIG_REL"
+            echo "📋 上级目录中的configs内容:"
+            ls -la ../configs/ 2>/dev/null || echo "configs目录不存在"
+            echo "📋 上级目录中的.github/configs内容:"
+            ls -la ../.github/configs/ 2>/dev/null || echo ".github/configs目录不存在"
+            exit 1
+          fi
+          
+          if [ ! -f "$BRANCH_CONFIG_REL" ]; then
+            echo "❌ 分支配置文件不存在: $BRANCH_CONFIG_REL"
+            exit 1
+          fi
           
           # 保存芯片配置（用于对比）
           echo "📋 保存芯片配置..."
-          cp "${{ steps.cache-key.outputs.chip-config }}" .config.chip
+          cp "$CHIP_CONFIG_REL" .config.chip
           echo "✅ 已保存芯片配置"
           
           # 应用芯片配置
-          cp "${{ steps.cache-key.outputs.chip-config }}" .config
+          cp "$CHIP_CONFIG_REL" .config
           echo "✅ 已应用芯片配置"
           
           # 保存分支配置（用于对比）
-          cp "${{ steps.cache-key.outputs.branch-config }}" .config.branch
+          cp "$BRANCH_CONFIG_REL" .config.branch
           echo "✅ 已保存分支配置"
           
           # 追加分支配置
-          cat "${{ steps.cache-key.outputs.branch-config }}" >> .config
+          cat "$BRANCH_CONFIG_REL" >> .config
           echo "✅ 已应用分支配置"
           
           # 查找并复制脚本文件
           if [ -d "../scripts" ]; then
             SCRIPT_DIR="../scripts"
-          elif [ -d ".github/scripts" ]; then
-            SCRIPT_DIR=".github/scripts"
+          elif [ -d "../.github/scripts" ]; then
+            SCRIPT_DIR="../.github/scripts"
           else
             echo "❌ 找不到scripts目录"
+            echo "📋 上级目录内容:"
+            ls -la ../
             exit 1
           fi
           
