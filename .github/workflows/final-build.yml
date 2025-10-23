@@ -39,24 +39,45 @@ jobs:
           echo ""
           echo "📌 查找scripts目录:"
           find . -name "scripts" -type d 2>/dev/null
+          echo ""
+          echo "📋 输入参数:"
+          echo "  - chip: '${{ inputs.chip }}'"
+          echo "  - branch: '${{ inputs.branch }}'"
+          echo "  - config: '${{ inputs.config }}'"
+          echo "  - base-cache-key: '${{ inputs.base-cache-key }}'"
 
       - name: 📦 恢复基础环境
         run: |
           echo "📦 恢复基础环境..."
           echo "📌 当前工作目录: $(pwd)"
-          echo "📌 基础缓存键: ${{ inputs.base-cache-key }}"
+          echo "📌 基础缓存键: '${{ inputs.base-cache-key }}'"
+          
+          # 检查缓存键是否为空
+          if [ -z "${{ inputs.base-cache-key }}" ]; then
+            echo "❌ 基础缓存键为空"
+            echo "📋 查找所有缓存目录:"
+            find . -name "build-base-*" -type d 2>/dev/null
+            exit 1
+          fi
+          
+          # 从缓存键中提取构建路径
+          BUILD_PATH=$(echo "${{ inputs.base-cache-key }}" | sed 's/base-//' | sed 's/-[^-]*$//' | sed 's/-[^-]*$//')
+          BUILD_PATH="build-base-$BUILD_PATH"
+          echo "📌 推断的构建路径: $BUILD_PATH"
           
           # 创建构建目录
           mkdir -p openwrt-build
           
           # 解压基础环境
-          if [ -f "build-base-${{ inputs.chip }}-${{ inputs.branch }}/base.tar.gz" ]; then
-            tar -xzf "build-base-${{ inputs.chip }}-${{ inputs.branch }}/base.tar.gz" -C openwrt-build
+          if [ -f "$BUILD_PATH/base.tar.gz" ]; then
+            tar -xzf "$BUILD_PATH/base.tar.gz" -C openwrt-build
             echo "✅ 基础环境恢复完成"
           else
             echo "❌ 找不到基础环境缓存文件"
             echo "📋 查找所有缓存目录:"
             find . -name "build-base-*" -type d 2>/dev/null
+            echo "📋 查找所有base.tar.gz文件:"
+            find . -name "base.tar.gz" -type f 2>/dev/null
             exit 1
           fi
 
