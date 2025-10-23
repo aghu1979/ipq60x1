@@ -1,6 +1,5 @@
 #!/bin/bash
 # OpenWrt软件包对比脚本
-# 功能：对比两个配置文件中的软件包差异
 
 set -e
 
@@ -74,7 +73,7 @@ extract_luci_packages() {
     local config_file=$1
     # 修复：使用更精确的正则表达式提取软件包
     grep "^CONFIG_PACKAGE_luci-" "$config_file" 2>/dev/null | \
-    sed -n 's/^CONFIG_PACKAGE_luci-\([^=]*\)=\(.*\)/\1=\2/p' | \
+    sed -n 's/^CONFIG_PACKAGE_luci-\([^=]*)=\(.*\)/\1=\2/' | \
     grep -v '^$' | sort
 }
 
@@ -127,15 +126,9 @@ compare_packages() {
 |------|-----------|
 | 配置1 | $total1 |
 | 配置2 | $total2 |
-EOF
-    
-    # 修复：避免语法错误
-    local diff=$((total2 - total1))
-    echo "| 差异 | $diff |" >> "$report_file"
-    
-    cat >> "$report_file" << EOF
+| 差异 | $((total2 - total1)) |
 
-## 📋 软件包详细对比
+## 📋 软件详细对比
 
 EOF
     
@@ -152,7 +145,7 @@ EOF
         cat >> "$report_file" << EOF
 ### ✅ 新增的软件包
 
-| 软件包 | 状态 | 说明 |
+| 软件 | 状态 | 说明 |
 |--------|------|------|
 EOF
         echo "$added" | while IFS= read -r line; do
@@ -176,7 +169,7 @@ EOF
         cat >> "$report_file" << EOF
 ### ❌ 删除的软件包
 
-| 软件包 | 状态 | 说明 |
+| 软件 | 状态 | 说明 |
 |--------|------|------|
 EOF
         echo "$removed" | while IFS= read -r line; do
@@ -192,21 +185,19 @@ EOF
     cat >> "$report_file" << EOF
 ### 🔄 状态改变的软件包
 
-| 软件包 | 状态 | 说明 |
+| 软件 | 状态 | 说明 |
 |--------|------|------|
 EOF
     
     # 创建状态映射
     declare -A status1 status2
     while IFS='=' read -r pkg status; do
-        # 修复：确保软件包名称不为空
         if [ -n "$pkg" ]; then
             status1["$pkg"]="$status"
         fi
     done < "$temp1"
     
     while IFS='=' read -r pkg status; do
-        # 修复：确保软件包名称不为空
         if [ -n "$pkg" ]; then
             status2["$pkg"]="$status"
         fi
@@ -214,7 +205,6 @@ EOF
     
     # 检查状态改变
     for pkg in "${!status1[@]}"; do
-        # 修复：检查软件包是否在第二个配置中存在
         if [[ -n "${status2[$pkg]}" && "${status1[$pkg]}" != "${status2[$pkg]}" ]]; then
             echo "  🔄 $pkg (${status1[$pkg]} → ${status2[$pkg]})"
             echo "| $pkg | ${status1[$pkg]} → ${status2[$pkg]} | 状态改变 |" >> "$report_file"
@@ -229,11 +219,10 @@ EOF
     
     # 添加完整软件包列表
     cat >> "$report_file" << EOF
-
 ## 📦 完整软件包列表
 
 ### 配置1中的软件包
-| 软件包 | 状态 |
+| 软件 | 状态 |
 |--------|------|
 EOF
     echo "$packages1" | while IFS='=' read -r pkg status; do
@@ -243,8 +232,8 @@ EOF
     cat >> "$report_file" << EOF
 
 ### 配置2中的软件包
-| 软件包 | 状态 |
-|--------|------|
+| 软件 | 状态 |
+|--------|------|------|
 EOF
     echo "$packages2" | while IFS='=' read -r pkg status; do
         echo "| $pkg | $status |" >> "$report_file"
@@ -269,7 +258,7 @@ main() {
     check_params "$@"
     
     # 执行对比
-    compare_packages "$1" "$2" "$3"
+    compare_packages "$@"
 }
 
 # 如果直接运行脚本
