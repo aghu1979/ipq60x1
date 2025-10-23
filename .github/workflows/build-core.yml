@@ -18,32 +18,6 @@ on:
         required: false
         default: 'openwrt'
         type: string
-  workflow_dispatch:
-    inputs:
-      build_all:
-        description: '是否编译所有组合'
-        required: true
-        default: true
-        type: boolean
-      chip:
-        description: '芯片型号（当build_all为false时生效）'
-        required: false
-        default: 'ipq60xx'
-        type: choice
-        options:
-          - ipq60xx
-          # - ipq80xx  # 暂时注释，保留扩展空间
-      branch:
-        description: '源码分支（当build_all为false时生效）'
-        required: false
-        default: 'openwrt'
-        type: choice
-        options:
-          - openwrt
-          - immwrt
-          - libwrt
-  schedule:
-    - cron: '0 2 * * 1'  # 每周一凌晨2点自动编译
 
 jobs:
   generate-matrix:
@@ -180,18 +154,3 @@ jobs:
           name: core-map-${{ github.run_id }}
           path: core-map.json
           retention-days: 1
-
-  # 自动触发所有软件包编译
-  trigger-packages:
-    needs: [generate-matrix, build-core, generate-core-map]
-    runs-on: ubuntu-latest
-    if: always() && needs.build-core.result == 'success' && needs.generate-core-map.result == 'success'
-    strategy:
-      fail-fast: false
-      matrix:
-        package: [Pro, Max, Ultra]
-    steps:
-      - name: 🚀 触发软件包编译
-        run: |
-          echo "📋 将为所有核心系统编译 ${{ matrix.package }} 软件包"
-          # 这里只是展示信息，实际的软件包编译需要手动触发或通过其他方式
