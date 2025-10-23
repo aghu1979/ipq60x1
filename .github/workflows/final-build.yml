@@ -28,6 +28,18 @@ jobs:
       - name: 📥 检出代码
         uses: actions/checkout@v4
 
+      - name: 🔍 检查目录结构
+        run: |
+          echo "📌 当前工作目录: $(pwd)"
+          echo "📌 根目录内容:"
+          ls -la
+          echo ""
+          echo "📌 查找configs目录:"
+          find . -name "configs" -type d 2>/dev/null
+          echo ""
+          echo "📌 查找scripts目录:"
+          find . -name "scripts" -type d 2>/dev/null
+
       - name: 📦 恢复基础环境
         run: |
           echo "📦 恢复基础环境..."
@@ -43,6 +55,8 @@ jobs:
             echo "✅ 基础环境恢复完成"
           else
             echo "❌ 找不到基础环境缓存文件"
+            echo "📋 查找所有缓存目录:"
+            find . -name "build-base-*" -type d 2>/dev/null
             exit 1
           fi
 
@@ -55,35 +69,47 @@ jobs:
           cp .config .config.base
           echo "📋 原始配置项数: $(grep -c '^CONFIG_' .config.base)"
           
-          # 检查用户配置文件
-          USER_CONFIG="../configs/${{ inputs.config }}.config"
-          if [ -f "$USER_CONFIG" ]; then
-            echo "📋 应用用户配置: $USER_CONFIG"
-            echo "📋 用户配置项数: $(grep -c '^CONFIG_' "$USER_CONFIG")"
-            
-            # 保存用户配置
-            cp "$USER_CONFIG" .config.user
-            
-            # 合并配置
-            while IFS= read -r line; do
-              if [[ $line =~ ^CONFIG_ ]]; then
-                key=$(echo "$line" | cut -d'=' -f1)
-                if grep -q "^$key=" .config; then
-                  sed -i "s|^$key=.*|$line|" .config
-                else
-                  echo "$line" >> .config
-                fi
-              fi
-            done < "$USER_CONFIG"
-            
-            echo "✅ 用户配置合并完成"
+          # 查找用户配置文件
+          if [ -f "../configs/${{ inputs.config }}.config" ]; then
+            USER_CONFIG="../configs/${{ inputs.config }}.config"
+          elif [ -f "../.github/configs/${{ inputs.config }}.config" ]; then
+            USER_CONFIG="../.github/configs/${{ inputs.config }}.config"
           else
-            echo "⚠️ 用户配置文件不存在: $USER_CONFIG"
-            touch .config.user  # 创建空文件避免错误
+            echo "❌ 找不到用户配置文件: ${{ inputs.config }}.config"
+            echo "📋 查找所有配置文件:"
+            find .. -name "*.config" -type f 2>/dev/null
+            exit 1
           fi
           
-          # 复制对比脚本
-          cp ../scripts/compare-packages.sh ./
+          echo "📋 应用用户配置: $USER_CONFIG"
+          echo "📋 用户配置项数: $(grep -c '^CONFIG_' "$USER_CONFIG")"
+          
+          # 保存用户配置
+          cp "$USER_CONFIG" .config.user
+          
+          # 合并配置
+          while IFS= read -r line; do
+            if [[ $line =~ ^CONFIG_ ]]; then
+              key=$(echo "$line" | cut -d'=' -f1)
+              if grep -q "^$key=" .config; then
+                sed -i "s|^$key=.*|$line|" .config
+              else
+                echo "$line" >> .config
+              fi
+            fi
+          done < "$USER_CONFIG"
+          
+          echo "✅ 用户配置合并完成"
+          
+          # 查找并复制对比脚本
+          if [ -f "../scripts/compare-packages.sh" ]; then
+            cp ../scripts/compare-packages.sh ./
+          elif [ -f "../.github/scripts/compare-packages.sh" ]; then
+            cp ../.github/scripts/compare-packages.sh ./
+          else
+            echo "❌ 找不到compare-packages.sh脚本"
+            exit 1
+          fi
           chmod +x compare-packages.sh
           
           # 第二阶段：对比基础配置和最终配置
@@ -107,18 +133,18 @@ jobs:
           echo "📦 最终需要的LUCI软件包总数: $TOTAL_PACKAGES"
           
           # 创建检查报告
-          cat > luci-final-check-${{ inputs.config }}.md << 'EOF'
-          # 最终LUCI软件包检查报告 - ${{ inputs.config }}
+          cat > luci-final-check-${{ inputs.config }}.md << EOF
+# 最终LUCI软件包检查报告 - ${{ inputs.config }}
 
-          **检查时间**: $(date)  
-          **配置**: ${{ inputs.chip }}-${{ inputs.branch }}-${{ inputs.config }}  
-          **总软件包数**: $TOTAL_PACKAGES  
+**检查时间**: $(date)  
+**配置**: ${{ inputs.chip }}-${{ inputs.branch }}-${{ inputs.config }}  
+**总软件包数**: $TOTAL_PACKAGES  
 
-          ## 📦 软件包可用性检查
+## 📦 软件包可用性检查
 
-          | 软件包 | 状态 | 位置 | 备注 |
-          |--------|------|------|------|
-          EOF
+| 软件包 | 状态 | 位置 | 备注 |
+|--------|------|------|------|
+EOF
           
           # 检查软件包可用性
           MISSING_COUNT=0
@@ -145,14 +171,14 @@ jobs:
           
           # 添加统计信息
           cat >> luci-final-check-${{ inputs.config }}.md << EOF
-          
-          ## 📊 统计信息
-          
-          - 总软件包数: $TOTAL_PACKAGES
-          - 找到软件包: $FOUND_COUNT
-          - 缺失软件包: $MISSING_COUNT
-          - 成功率: $(( FOUND_COUNT * 100 / TOTAL_PACKAGES ))%
-          EOF
+
+## 📊 统计信息
+
+- 总软件包数: $TOTAL_PACKAGES
+- 找到软件包: $FOUND_COUNT
+- 缺失软件包: $MISSING_COUNT
+- 成功率: $(( FOUND_COUNT * 100 / TOTAL_PACKAGES ))%
+EOF
           
           # 输出报告
           echo ""
