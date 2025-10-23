@@ -122,8 +122,8 @@ EOF
     while IFS= read -r pkg_line; do
         if [ -n "$pkg_line" ]; then
             # 修复：正确解析软件包名称和状态
-            local pkg=$(echo "$pkg_line" | cut -d'=' -f1)
-            local status=$(echo "$pkg_line" | cut -d'=' -f2)
+            pkg=$(echo "$pkg_line" | cut -d'=' -f1)
+            status=$(echo "$pkg_line" | cut -d'=' -f2)
             
             log_info "检查软件包: $pkg (状态: $status)"
             
@@ -135,7 +135,7 @@ EOF
                 ((FOUND_COUNT++))
             else
                 log_error "$pkg - 缺失"
-                printf '| %s | ❌ 缺失 | - | 需�要修复 |\n' "$pkg" >> "$REPORT_FILE"
+                printf '| %s | ❌ 缺失 | - | 需要修复 |\n' "$pkg" >> "$REPORT_FILE"
                 ((MISSING_COUNT++))
                 MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
             fi
@@ -226,17 +226,17 @@ try_fix_package() {
     # 查找相似软件包
     local similar=$(find_similar_packages "$pkg")
     if [ -n "$similar" ]; then
-        log_info "  找到相似的软件包:"
+        log_info " 找到相似的软件包:"
         echo "$similar" | sed 's/^/    /'
     fi
     
     # 尝试重新安装feeds
     log_info " 尝试重新安装feeds..."
     if ./scripts/feeds install "$pkg" 2>/dev/null; then
-        log_success "  $pkg - 成功安装"
+        log_success " $pkg - 成功安装"
         return 0
     else
-        log_error " 修复失败: $pkg"
+        log_error "修复失败: $pkg"
         return 1
     fi
 }
@@ -254,7 +254,7 @@ generate_report_header() {
 ## 📦 软件可用性检查
 
 | 软件 | 状态 | 位置 | 备注 |
-|--------|------|------|------|
+|--------|------|------|
 EOF
 }
 
@@ -267,7 +267,7 @@ generate_report_stats() {
     local final_missing=$5
     
     cat >> "$REPORT_FILE" << EOF
-## 📊 统计信息
+## 📊� 统计信息
 
 - 总软件包数: $total
 - 找到软件包: $found
@@ -287,7 +287,7 @@ EOF
 
 - 尝试修复: $missing
 - 成功修复: $repaired
-- 保存报告
+- 仍然缺失: $final_missing
 EOF
     fi
 }
@@ -305,7 +305,7 @@ main() {
     
     # 执行检查
     if check_packages; then
-        log_success "LUCI软件包检查完成"
+        log_success "LUCI软件包检查完成！"
         exit 0
     else
         log_error "LUCI软件包检查失败"
