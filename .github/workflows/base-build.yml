@@ -126,16 +126,19 @@ jobs:
           # 创建构建目录
           mkdir -p ${{ steps.cache-key.outputs.path }}
           
-          # 设置源码仓库URL
+          # 设置源码仓库URL和分支 - 使用正确的仓库地址
           case "${{ inputs.branch }}" in
             "openwrt")
-              REPO_URL="https://github.com/openwrt/openwrt"
+              REPO_URL="https://github.com/laipeng668/openwrt.git"
+              REPO_BRANCH="master"
               ;;
             "immwrt")
-              REPO_URL="https://github.com/immortalwrt/immortalwrt"
+              REPO_URL="https://github.com/laipeng668/immortalwrt.git"
+              REPO_BRANCH="master"
               ;;
             "libwrt")
-              REPO_URL="https://github.com/LibreWrt/LibreWrt"
+              REPO_URL="https://github.com/laipeng668/openwrt-6.x.git"
+              REPO_BRANCH="k6.12-nss"
               ;;
             *)
               echo "❌ 不支持的分支: ${{ inputs.branch }}"
@@ -144,13 +147,17 @@ jobs:
               ;;
           esac
           
-          # 克隆源码
           echo "🔽 克隆源码: $REPO_URL"
-          git clone --depth=1 $REPO_URL openwrt-src
+          echo "📋 使用分支: $REPO_BRANCH"
+          
+          # 克隆指定分支
+          git clone --depth=1 -b $REPO_BRANCH $REPO_URL openwrt-src
           
           # 进入源码目录
           cd openwrt-src
           echo "📌 进入源码目录: $(pwd)"
+          echo "📌 当前分支:"
+          git branch
           echo "📌 上级目录内容:"
           ls -la ../
           
@@ -238,10 +245,10 @@ jobs:
           make -j$(nproc) IGNORE_ERRORS=1 tools/compile
           make -j$(nproc) IGNORE_ERRORS=1 toolchain/compile
           
-          # 保存对比报告
+          # 保存对比报告到当前目录
           if [ -f "luci-packages-基础系统.md" ]; then
-            cp luci-packages-基础系统.md ../
-            echo "✅ 已保存对比报告"
+            cp luci-packages-基础系统.md ../luci-packages-基础系统-${{ inputs.branch }}.md
+            echo "✅ 已保存对比报告: luci-packages-基础系统-${{ inputs.branch }}.md"
           else
             echo "⚠️ 对比报告未生成"
           fi
@@ -258,8 +265,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: base-report-${{ github.run_id }}
+          name: base-report-${{ inputs.branch }}-${{ github.run_id }}
           path: |
-            luci-packages-基础系统.md
+            luci-packages-基础系统-${{ inputs.branch }}.md
           retention-days: 7
           if-no-files-found: warn
