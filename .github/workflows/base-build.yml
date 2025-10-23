@@ -70,7 +70,7 @@ jobs:
             echo "  ✅ 找到芯片配置: $CHIP_CONFIG"
           elif [ -f ".github/configs/$CHIP_CONFIG_FILE" ]; then
             CHIP_CONFIG=".github/configs/$CHIP_CONFIG_FILE"
-            echo "  # 芯片配置文件: $CHIP_CONFIG"
+            echo "  ✅ 找到芯片配置: $CHIP_CONFIG"
           else
             echo "  ❌ 找不到芯片配置文件: $CHIP_CONFIG_FILE"
             echo "📋 可用的芯片配置文件:"
@@ -113,7 +113,7 @@ jobs:
           restore-keys: |
             base-${{ inputs.chip }}-${{ inputs.branch }}-
 
-      - name: 🌱� 准备基础环境
+      - name: 🌱 准备基础环境
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           echo "🔧 准备基础编译环境..."
@@ -223,7 +223,7 @@ jobs:
           cp "$SCRIPT_DIR/diy.sh" ./
           cp "$SCRIPT_DIR/repo.sh" ./
           cp "$SCRIPT_DIR/package-check.sh" ./
-          cp "$SCRIPT_DIR/compare-packages.sh ./
+          cp "$SCRIPT_DIR/compare-packages.sh" ./
           chmod +x diy.sh repo.sh package-check.sh compare-packages.sh
           
           # 第一次LUCI软件包检查
@@ -292,7 +292,7 @@ jobs:
           # 复制所有.md文件到上级目录
           for report in *.md; do
             if [ -f "$report" ]; then
-              cp "$report" ../luci-packages-基础系统-${{ inputs.branch }}.md
+              cp "$report" "../luci-packages-基础系统-${{ inputs.branch }}.md"
               echo "✅ 已保存报告: $report"
             fi
           done
@@ -312,6 +312,8 @@ jobs:
           
           # 解压缓存中的报告文件
           BUILD_PATH="${{ steps.cache-key.outputs.path }}"
+          echo "📌 构建路径: $BUILD_PATH"
+          
           if [ -f "$BUILD_PATH/base.tar.gz" ]; then
             echo "📦 解压缓存文件..."
             mkdir -p temp-extract
@@ -324,10 +326,10 @@ jobs:
             # 复制所有.md文件到当前目录
             find temp-extract -name "*.md" -type f -exec cp {} . \;
             
-            # 复制到上级目录
+            # 复制到上级目录 - 修复引号问题
             for report in 基础系统-最终检查.md 基础系统-初步检查.md 基础系统.md; do
               if [ -f "temp-extract/$report" ]; then
-                cp "temp-extract/$report" ../luci-packages-基础系统-${{ inputs.branch }}.md"
+                cp "temp-extract/$report" "../luci-packages-基础系统-${{ inputs.branch }}.md"
                 echo "✅ 已提取报告: $report"
               fi
             done
@@ -340,6 +342,8 @@ jobs:
             ls -la *.md 2>/dev/null || echo "没有找到报告文件"
           else
             echo "❌ 缓存中没有找到base.tar.gz文件"
+            echo "📋 检查构建路径内容:"
+            ls -la "$BUILD_PATH" 2>/dev/null || echo "构建路径不存在"
           fi
 
       - name: 📤 上传基础系统报告
