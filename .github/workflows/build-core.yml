@@ -74,9 +74,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    outputs:
-      ${{ matrix.chip }}-${{ matrix.branch }}-cache-key: ${{ steps.setup.outputs.cache-key }}
-      ${{ matrix.chip }}-${{ matrix.branch }}-build-path: ${{ steps.setup.outputs.build-path }}
     steps:
       - name: 📥 检出代码
         uses: actions/checkout@v4
