@@ -1,6 +1,5 @@
 #!/bin/bash
 # LUCI软件包检查和自动修复脚本
-# 用法: package-check.sh <配置文件> [报告名称] [修复模式]
 
 set -e
 
@@ -14,7 +13,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # 图标定义
 ICON_SUCCESS="✅"
@@ -23,14 +22,6 @@ ICON_WARNING="⚠️"
 ICON_INFO="ℹ️"
 ICON_REPAIR="🔧"
 ICON_PACKAGE="📦"
-
-# 全局变量
-MISSING_COUNT=0
-FOUND_COUNT=0
-REPAIRED_COUNT=0
-FINAL_MISSING_COUNT=0
-MISSING_PACKAGES=""
-REPORT_FILE=""
 
 # 日志函数
 log_info() {
@@ -49,10 +40,6 @@ log_warning() {
     echo -e "${YELLOW}${ICON_WARNING} $1${NC}"
 }
 
-log_repair() {
-    echo -e "${BLUE}${ICON_REPAIR} $1${NC}"
-}
-
 # 显示帮助信息
 show_help() {
     cat << EOF
@@ -67,7 +54,7 @@ LUCI软件包检查和自动修复脚本
 
 示例:
   $0 .config "基础系统检查" true
-  $0 .config.user "最终配置检查" false
+  $0 .config.user "最终检查" false
 
 EOF
 }
@@ -96,132 +83,10 @@ check_params() {
 
 # 提取LUCI软件包
 extract_luci_packages() {
-    # 修复：使用更精确的正则表达式提取软件包
+    # 修复：使用更可靠的方法提取软件包
     grep "^CONFIG_PACKAGE_luci-" "$CONFIG_FILE" 2>/dev/null | \
-    sed -n 's/^CONFIG_PACKAGE_luci-\([^=]*\)=\(.*\)/\1=\2/p' | \
+    sed -n 's/^CONFIG_PACKAGE_luci-\([^=]*)=\(.*\)/\1=\2/' | \
     grep -v '^$' | sort
-}
-
-# 检查软件包是否存在
-check_package_exists() {
-    local pkg=$1
-    [ -d "package/feeds/packages/$pkg" ] || \
-    [ -d "package/feeds/luci/$pkg" ] || \
-    [ -d "package/$pkg" ]
-}
-
-# 获取软件包位置
-get_package_location() {
-    local pkg=$1
-    if [ -d "package/feeds/packages/$pkg" ]; then
-        echo "packages"
-    elif [ -d "package/feeds/luci/$pkg" ]; then
-        echo "luci"
-    elif [ -d "package/$pkg" ]; then
-        echo "local"
-    else
-        echo "缺失"
-    fi
-}
-
-# 查找相似软件包
-find_similar_packages() {
-    local pkg=$1
-    local keyword=$(echo "$pkg" | tr '-' '\n' | head -1)
-    find package/feeds -name "*${keyword}*" -type d 2>/dev/null | head -5 | \
-    sed 's|.*/||' | sort
-}
-
-# 查找软件包定义
-find_package_definition() {
-    local pkg=$1
-    find . -name "Makefile" -exec grep -l "Package/$pkg" {} \; 2>/dev/null | \
-    head -3 | sed 's|^|  |'
-}
-
-# 尝试修复软件包
-try_fix_package() {
-    local pkg=$1
-    
-    log_repair "尝试修复软件包: $pkg"
-    
-    # 查找相似软件包
-    local similar=$(find_similar_packages "$pkg")
-    if [ -n "$similar" ]; then
-        log_info "  找到相似的软件包:"
-        echo "$similar" | sed 's/^/    /'
-    fi
-    
-    # 尝试重新安装feeds
-    log_info "  尝试重新安装feeds..."
-    if ./scripts/feeds install "$pkg" 2>/dev/null; then
-        log_success "  成功安装: $pkg"
-        return 0
-    else
-        log_error "  无法安装: $pkg"
-        
-        # 查找软件包定义
-        local pkg_def=$(find_package_definition "$pkg")
-        if [ -n "$pkg_def" ]; then
-            log_info "  软件包定义位置:"
-            echo "$pkg_def"
-        fi
-        
-        return 1
-    fi
-}
-
-# 生成报告头部
-generate_report_header() {
-    local total_packages=$1
-    cat > "$REPORT_FILE" << EOF
-# $REPORT_NAME
-
-**检查时间**: $(date)  
-**配置文件**: $CONFIG_FILE  
-**总软件包数**: $total_packages  
-
-## 📦 软件包可用性检查
-
-| 软件包 | 状态 | 位置 | 备注 |
-|--------|------|------|------|
-EOF
-}
-
-# 生成报告统计
-generate_report_stats() {
-    local total=$1
-    local found=$2
-    local missing=$3
-    local repaired=$4
-    local final_missing=$5
-    
-    cat >> "$REPORT_FILE" << EOF
-
-## 📊 统计信息
-
-- 总软件包数: $total
-- 找到软件包: $found
-- 缺失软件包: $missing
-EOF
-    
-    # 修复：避免除零错误
-    if [ $total -gt 0 ]; then
-        echo "- 成功率: $(( found * 100 / total ))%" >> "$REPORT_FILE"
-    else
-        echo "- 成功率: 0%" >> "$REPORT_FILE"
-    fi
-    
-    if [ "$AUTO_FIX" = "true" ] && [ $missing -gt 0 ]; then
-        cat >> "$REPORT_FILE" << EOF
-
-## 🔧 自动修复结果
-
-- 尝试修复: $missing
-- 成功修复: $repaired
-- 仍然缺失: $final_missing
-EOF
-    fi
 }
 
 # 主检查函数
@@ -239,7 +104,7 @@ check_packages() {
 **检查时间**: $(date)  
 **配置文件**: $CONFIG_FILE  
 
-ℹ️ 配置文件中没有LUCI软件包
+ℹ️ 配置文件中没有L�UCI软件包
 EOF
         return 0
     fi
@@ -306,36 +171,125 @@ EOF
                 ((FINAL_MISSING_COUNT++))
             fi
         done
-    fi
-    
-    # 生成报告统计
-    generate_report_stats $total_packages $FOUND_COUNT $MISSING_COUNT $REPAIRED_COUNT $FINAL_MISSING_COUNT
-    
-    # 输出报告摘要
-    echo ""
-    log_info "报告摘要:"
-    echo "  - 总软件包数: $total_packages"
-    echo "  - 找到软件包: $FOUND_COUNT"
-    echo "  - 缺失软件包: $MISSING_COUNT"
-    if [ "$AUTO_FIX" = "true" ] && [ $MISSING_COUNT -gt 0 ]; then
-        echo "  - 成功修复: $REPAIRED_COUNT"
-        echo "  - 仍然缺失: $FINAL_MISSING_COUNT"
-    fi
-    
-    # 输出报告内容
-    echo ""
-    log_info "详细报告内容:"
-    echo "=========================="
-    cat "$REPORT_FILE"
-    echo "=========================="
-    
-    # 返回结果
-    if [ $FINAL_MISSING_COUNT -gt 0 ]; then
-        log_error "仍有 $FINAL_MISSING_COUNT 个软件包无法修复"
-        return 1
+        
+        # 生成报告统计
+        generate_report_stats $total_packages $FOUND_COUNT $MISSING_COUNT $REPAIRED_COUNT $FINAL_MISSING_COUNT
+        
+        # 输出报告摘要
+        echo ""
+        log_info "报告摘要:"
+        echo "  - 总软件包数: $total_packages"
+        echo "  - 找到软件包: $FOUND_COUNT"
+        echo "  - 缺失软件包: $MISSING_COUNT"
+        if [ "$AUTO_FIX" = "true" ] && [ $MISSING_COUNT -gt 0 ]; then
+            echo "  - 成功修复: $REPAIRED_COUNT"
+            echo "  - 仍然缺失: $FINAL_MISSING_COUNT"
+        fi
+        
+        # 输出报告内容
+        echo ""
+        log_info "详细报告内容:"
+        echo "=========================="
+        cat "$REPORT_FILE"
+        echo "=========================="
+        
+        # 返回结果
+        if [ $FINAL_MISSING_COUNT -gt 0 ]; then
+            log_error "仍有 $FINAL_MISSING_COUNT 个软件包无法修复"
+            return 1
+        else
+            log_success "所有LUCI软件包检查通过！"
+            return 0
+        fi
+}
+
+# 获取软件包位置
+get_package_location() {
+    local pkg=$1
+    if [ -d "package/feeds/packages/$pkg" ]; then
+        echo "packages"
+    elif [ -d "package/feeds/luci/$pkg" ]; then
+        echo "luci"
+    elif [ -d "package/$pkg" ]; then
+        echo "local"
     else
-        log_success "所有LUCI软件包检查通过！"
+        echo "缺失"
+    fi
+}
+
+# 尝试修复软件包
+try_fix_package() {
+    local pkg=$1
+    
+    log_repair "尝试修复软件包: $pkg"
+    
+    # 查找相似软件包
+    local similar=$(find_similar_packages "$pkg")
+    if [ -n "$similar" ]; then
+        log_info "  找到相似的软件包:"
+        echo "$similar" | sed 's/^/    /'
+    fi
+    
+    # 尝试重新安装feeds
+    log_info "  尝试重新安装feeds..."
+    if ./scripts/feeds install "$pkg" 2>/dev/null; then
+        log_success "  $pkg - 成功安装"
         return 0
+    else
+        log_error "  - 无法安装: $pkg"
+        return 1
+    fi
+}
+
+# 生成报告头部
+generate_report_header() {
+    local total_packages=$1
+    cat > "$REPORT_FILE" << EOF
+# $REPORT_NAME
+
+**检查时间**: $(date)  
+**配置文件**: $CONFIG_FILE  
+**总软件包数**: $total_packages  
+
+## 📦 软件可用性检查
+
+| 软件包 | 状态 | 位置 | 备注 |
+|--------|------|------|------|
+EOF
+}
+
+# 生成报告统计
+generate_report_stats() {
+    local total=$1
+    local found=$2
+    local missing=$3
+    local repaired=$4
+    local final_missing=$5
+    
+    cat >> "$REPORT_FILE" << EOF
+## 📊 统计信息
+
+- 总软件包数: $total
+- 找到软件包: $found
+- 缺失软件包: $missing
+EOF
+    
+    # 修复：避免除零错误
+    if [ $total -gt 0 ]; then
+        echo "- 成功率: $(( found * 100 / total ))%" >> "$REPORT_FILE"
+    else
+        echo "- 成功率: 0%" >> "$REPORT_FILE"
+    fi
+    
+    if [ "$AUTO_FIX" = "true" ] && [ $missing -gt 0 ]; then
+        cat >> "$REPORT_FILE" << EOF
+
+## 🔧 自动修复结果
+
+- 尝试修复: $missing
+- 成功修复: $repaired
+- 仍然缺失: $final_missing
+EOF
     fi
 }
 
@@ -360,5 +314,7 @@ main() {
     fi
 }
 
-# 执行主函数
-main "$@"
+# 如果直接运行脚本
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
+fi
