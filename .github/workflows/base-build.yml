@@ -207,29 +207,7 @@ jobs:
           make defconfig
           echo "📋 基础配置项数: $(grep -c '^CONFIG_' .config)"
           
-          # 第一次LUCI软件包检查
-          echo ""
-          echo "🔍 ==================== 第一次LUCI软件包检查 ===================="
-          # 复制检查脚本
-          if [ -f "../scripts/package-check.sh" ]; then
-            cp ../scripts/package-check.sh ./
-            chmod +x package-check.sh
-          elif [ -f "../.github/scripts/package-check.sh" ]; then
-            cp ../.github/scripts/package-check.sh ./
-            chmod +x package-check.sh
-          else
-            echo "❌ 找不到package-check.sh脚本"
-            exit 1
-          fi
-          
-          # 执行检查（不自动修复）
-          if ./package-check.sh .config "基础系统-初步检查" false; then
-            echo "✅ 初步检查通过"
-          else
-            echo "⚠️ 初步检查发现问题，将在feeds更新后修复"
-          fi
-          
-          # 查找并复制其他脚本文件
+          # 复制脚本文件
           if [ -d "../scripts" ]; then
             SCRIPT_DIR="../scripts"
           elif [ -d "../.github/scripts" ]; then
@@ -244,8 +222,19 @@ jobs:
           echo "📋 使用脚本目录: $SCRIPT_DIR"
           cp "$SCRIPT_DIR/diy.sh" ./
           cp "$SCRIPT_DIR/repo.sh" ./
+          cp "$SCRIPT_DIR/package-check.sh" ./
           cp "$SCRIPT_DIR/compare-packages.sh" ./
-          chmod +x diy.sh repo.sh compare-packages.sh
+          chmod +x diy.sh repo.sh package-check.sh compare-packages.sh
+          
+          # 第一次LUCI软件包检查
+          echo ""
+          echo "🔍 ==================== 第一次LUCI软件包检查 ===================="
+          # 执行检查（不自动修复）
+          if ./package-check.sh .config "基础系统-初步检查" false; then
+            echo "✅ 初步检查通过"
+          else
+            echo "⚠️ 初步检查发现问题，将在feeds更新后修复"
+          fi
           
           # 第一阶段：对比芯片配置和合并后的配置
           echo ""
@@ -292,6 +281,8 @@ jobs:
           if [ -f "基础系统-最终检查.md" ]; then
             cp 基础系统-最终检查.md ../luci-packages-基础系统-${{ inputs.branch }}.md
             echo "✅ 已保存对比报告: luci-packages-基础系统-${{ inputs.branch }}.md"
+          else
+            echo "⚠️ 对比报告未生成"
           fi
           
           # 返回上级目录
