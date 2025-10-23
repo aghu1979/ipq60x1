@@ -60,6 +60,11 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           echo "🔧 准备基础编译环境..."
+          echo "📌 当前工作目录: $(pwd)"
+          echo "📌 配置文件目录内容:"
+          ls -la .github/configs/
+          
+          # 创建构建目录
           mkdir -p ${{ steps.cache-key.outputs.path }}
           
           # 设置源码仓库URL
@@ -80,32 +85,60 @@ jobs:
           esac
           
           # 克隆源码
+          echo "🔽 克隆源码: $REPO_URL"
           git clone --depth=1 $REPO_URL openwrt-src
+          
+          # 进入源码目录
           cd openwrt-src
+          echo "📌 进入源码目录: $(pwd)"
           
-          # 应用基础配置
-          cp "../.github/configs/base_${{ inputs.chip }}.config" .config
-          cat "../.github/configs/base_${{ inputs.branch }}.config" >> .config
+          # 复制配置文件（使用绝对路径）
+          echo "📋 应用基础配置..."
+          if [ -f "../.github/configs/base_${{ inputs.chip }}.config" ]; then
+            cp "../.github/configs/base_${{ inputs.chip }}.config" .config
+            echo "✅ 已应用芯片配置: base_${{ inputs.chip }}.config"
+          else
+            echo "❌ 找不到芯片配置文件: .github/configs/base_${{ inputs.chip }}.config"
+            exit 1
+          fi
           
-          # 执行初始化脚本
+          if [ -f "../.github/configs/base_${{ inputs.branch }}.config" ]; then
+            cat "../.github/configs/base_${{ inputs.branch }}.config" >> .config
+            echo "✅ 已应用分支配置: base_${{ inputs.branch }}.config"
+          else
+            echo "❌ 找不到分支配置文件: .github/configs/base_${{ inputs.branch }}.config"
+            exit 1
+          fi
+          
+          # 复制脚本文件
           cp ../scripts/diy.sh ./
           cp ../scripts/repo.sh ./
           chmod +x diy.sh repo.sh
+          
+          # 执行初始化脚本
+          echo "🔧 执行系统初始化..."
           ./diy.sh
+          
+          echo "📦 添加第三方软件源..."
           ./repo.sh
           
           # 更新feeds
+          echo "🔄 更新软件包索引..."
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           
           # 准备编译环境
+          echo "🔨 准备编译工具链..."
           make defconfig
           make -j$(nproc) IGNORE_ERRORS=1 download
           make -j$(nproc) IGNORE_ERRORS=1 tools/compile
           make -j$(nproc) IGNORE_ERRORS=1 toolchain/compile
           
-          # 打包基础环境
+          # 返回上级目录
           cd ..
+          
+          # 打包基础环境
+          echo "📦 打包基础环境..."
           tar -czf ${{ steps.cache-key.outputs.path }}/base.tar.gz -C openwrt-src .
           echo "✅ 基础环境准备完成"
 
@@ -120,9 +153,21 @@ jobs:
 
       - name: 📦 恢复基础环境
         run: |
+          echo "📦 恢复基础环境..."
+          echo "📌 当前工作目录: $(pwd)"
+          echo "📌 缓存路径: ${{ needs.prepare-base.outputs.build-path }}"
+          
+          # 创建构建目录
           mkdir -p openwrt-build
-          tar -xzf ${{ needs.prepare-base.outputs.build-path }}/base.tar.gz -C openwrt-build
-          echo "✅ 基础环境恢复完成"
+          
+          # 解压基础环境
+          if [ -f "${{ needs.prepare-base.outputs.build-path }}/base.tar.gz" ]; then
+            tar -xzf "${{ needs.prepare-base.outputs.build-path }}/base.tar.gz" -C openwrt-build
+            echo "✅ 基础环境恢复完成"
+          else
+            echo "❌ 找不到基础环境缓存文件"
+            exit 1
+          fi
 
       - name: 🔧 合并配置文件
         run: |
@@ -131,9 +176,15 @@ jobs:
           
           # 备份原始配置
           cp .config .config.base
+          echo "📋 原始配置项数: $(grep -c '^CONFIG_' .config.base)"
           
-          # 合并用户配置
-          if [ -f "../.github/configs/${{ inputs.config }}.config" ]; then
+          # 检查用户配置文件
+          USER_CONFIG="../.github/configs/${{ inputs.config }}.config"
+          if [ -f "$USER_CONFIG" ]; then
+            echo "📋 应用用户配置: $USER_CONFIG"
+            echo "📋 用户配置项数: $(grep -c '^CONFIG_' "$USER_CONFIG")"
+            
+            # 合并配置
             while IFS= read -r line; do
               if [[ $line =~ ^CONFIG_ ]]; then
                 key=$(echo "$line" | cut -d'=' -f1)
@@ -143,17 +194,16 @@ jobs:
                   echo "$line" >> .config
                 fi
               fi
-            done < "../.github/configs/${{ inputs.config }}.config"
+            done < "$USER_CONFIG"
+            
+            echo "✅ 用户配置合并完成"
+          else
+            echo "⚠️ 用户配置文件不存在: $USER_CONFIG"
           fi
           
           # 生成最终配置
           make defconfig
-          
-          echo "✅ 配置合并完成"
-          echo "📊 配置统计:"
-          echo "  - 基础配置项: $(grep -c '^CONFIG_' .config.base)"
-          echo "  - 用户配置项: $(grep -c '^CONFIG_' "../.github/configs/${{ inputs.config }}.config" 2>/dev/null || echo 0)"
-          echo "  - 最终配置项: $(grep -c '^CONFIG_' .config)"
+          echo "📋 最终配置项数: $(grep -c '^CONFIG_' .config)"
 
       - name: 🔍 检查LUCI软件包
         run: |
@@ -162,31 +212,61 @@ jobs:
           
           # 提取所有LUCI软件包
           LUCI_PACKAGES=$(grep "^CONFIG_PACKAGE_luci-" .config | sed 's/^CONFIG_PACKAGE_\(.*\)=y/\1/' | sort)
-          echo "📦 需要的LUCI软件包:"
-          echo "$LUCI_PACKAGES"
+          TOTAL_PACKAGES=$(echo "$LUCI_PACKAGES" | wc -l)
+          echo "📦 需要的LUCI软件包总数: $TOTAL_PACKAGES"
+          
+          # 创建检查报告
+          echo "# LUCI软件包检查报告" > luci-check-report.md
+          echo "## 检查时间: $(date)" >> luci-check-report.md
+          echo "## 配置: ${{ inputs.chip }}-${{ inputs.branch }}-${{ inputs.config }}" >> luci-check-report.md
+          echo "" >> luci-check-report.md
+          echo "| 软件包 | 状态 | 位置 |" >> luci-check-report.md
+          echo "|--------|------|------|" >> luci-check-report.md
           
           # 检查软件包可用性
-          MISSING_PACKAGES=""
+          MISSING_COUNT=0
+          FOUND_COUNT=0
           for pkg in $LUCI_PACKAGES; do
-            if [ -d "package/feeds/packages/$pkg" ] || [ -d "package/feeds/luci/$pkg" ] || [ -d "package/$pkg" ]; then
-              echo "✅ $pkg - 可用"
+            if [ -d "package/feeds/packages/$pkg" ]; then
+              echo "✅ $pkg - 可用 (packages)"
+              echo "| $pkg | ✅ 可用 | packages |" >> luci-check-report.md
+              ((FOUND_COUNT++))
+            elif [ -d "package/feeds/luci/$pkg" ]; then
+              echo "✅ $pkg - 可用 (luci)"
+              echo "| $pkg | ✅ 可用 | luci |" >> luci-check-report.md
+              ((FOUND_COUNT++))
+            elif [ -d "package/$pkg" ]; then
+              echo "✅ $pkg - 可用 (local)"
+              echo "| $pkg | ✅ 可用 | local |" >> luci-check-report.md
+              ((FOUND_COUNT++))
             else
               echo "❌ $pkg - 缺失"
-              MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
+              echo "| $pkg | ❌ 缺失 | - |" >> luci-check-report.md
+              ((MISSING_COUNT++))
             fi
           done
           
-          if [ -n "$MISSING_PACKAGES" ]; then
+          echo "" >> luci-check-report.md
+          echo "## 统计信息" >> luci-check-report.md
+          echo "- 总软件包数: $TOTAL_PACKAGES" >> luci-check-report.md
+          echo "- 找到软件包: $FOUND_COUNT" >> luci-check-report.md
+          echo "- 缺失软件包: $MISSING_COUNT" >> luci-check-report.md
+          
+          # 输出报告
+          cat luci-check-report.md
+          
+          if [ $MISSING_COUNT -gt 0 ]; then
             echo ""
-            echo "🚨 发现缺失的LUCI软件包: $MISSING_PACKAGES"
+            echo "🚨 发现 $MISSING_COUNT 个缺失的LUCI软件包！"
             echo "💡 修复建议:"
             echo "1. 检查软件包名称是否正确"
             echo "2. 更新第三方软件源"
             echo "3. 确认软件包在当前分支中可用"
+            echo "4. 检查软件包依赖关系"
             exit 1
           else
             echo ""
-            echo "✅ 所有LUCI软件包检查通过！"
+            echo "✅ 所有 $TOTAL_PACKAGES 个LUCI软件包检查通过！"
           fi
 
       - name: 🚀 编译固件
@@ -196,17 +276,22 @@ jobs:
           cd openwrt-build
           
           # 设置编译参数
-          make -j$(nproc) || {
-            echo "❌ 编译失败，尝试单线程编译..."
+          echo "🔨 使用 $(nproc) 个核心并行编译"
+          
+          # 尝试并行编译
+          if ! make -j$(nproc) IGNORE_ERRORS=1; then
+            echo "⚠️ 并行编译失败，尝试单线程编译..."
             make -j1 V=s
-          }
+          fi
           
           # 检查编译结果
-          if [ -d "bin/targets" ]; then
+          if [ -d "bin/targets" ] && [ "$(ls -A bin/targets)" ]; then
             echo "✅ 编译成功"
+            echo "📦 生成的固件文件:"
+            find bin/targets -name "*.bin" -type f -exec ls -lh {} \;
             echo "status=success" >> $GITHUB_OUTPUT
           else
-            echo "❌ 编译失败"
+            echo "❌ 编译失败，未找到固件文件"
             echo "status=failed" >> $GITHUB_OUTPUT
             exit 1
           fi
@@ -217,20 +302,33 @@ jobs:
           mkdir -p artifacts
           
           # 复制固件文件
+          echo "📂 收集固件文件..."
           find openwrt-build/bin/targets -name "*.bin" -type f -exec cp {} artifacts/ \;
           
           # 复制配置文件
+          echo "📂 收集配置文件..."
           cp openwrt-build/.config artifacts/config-${{ inputs.chip }}-${{ inputs.branch }}-${{ inputs.config }}.config
           find openwrt-build/bin/targets -name "*.manifest" -type f -exec cp {} artifacts/ \;
           find openwrt-build/bin/targets -name "config.buildinfo" -type f -exec cp {} artifacts/ \;
           
           # 复制软件包
+          echo "📂 收集软件包..."
           mkdir -p artifacts/packages
           find openwrt-build/bin/packages -name "*.ipk" -type f -exec cp {} artifacts/packages/ \;
           
+          # 复制检查报告
+          if [ -f "openwrt-build/luci-check-report.md" ]; then
+            cp openwrt-build/luci-check-report.md artifacts/
+          fi
+          
           # 生成文件清单
+          echo "📋 生成文件清单..."
           ls -la artifacts/ > artifacts/filelist.txt
           echo "✅ 产物收集完成"
+          echo "📊 产物统计:"
+          echo "  - 固件文件: $(find artifacts -name '*.bin' | wc -l)"
+          echo "  - 软件包: $(find artifacts/packages -name '*.ipk' | wc -l)"
+          echo "  - 配置文件: $(find artifacts -name '*.config' | wc -l)"
 
       - name: 📤 上传编译产物
         uses: actions/upload-artifact@v4
