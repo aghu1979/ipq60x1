@@ -108,8 +108,8 @@ jobs:
       - name: 📋 生成缓存信息
         id: cache-info
         run: |
-          # 生成包含所有缓存信息的JSON
-          CACHE_INFO=$(jq -n \
+          # 生成包含所有缓存信息的JSON（压缩为一行）
+          CACHE_INFO=$(jq -c -n \
             --arg branch "${{ inputs.branch }}" \
             --arg key "${{ steps.cache-key.outputs.key }}" \
             --arg path "${{ steps.cache-key.outputs.path }}" \
