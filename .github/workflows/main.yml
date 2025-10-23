@@ -1,91 +1,70 @@
 name: OpenWrt Build Scheduler
 
 on:
-  workflow_dispatch:
-    inputs:
-      config:
-        description: '选择配置文件'
-        required: true
-        default: 'libwrt'
-        type: choice
-        options:
-        - libwrt
-      ssh:
-        description: 'SSH连接到Actions'
-        required: false
-        default: 'false'
-        type: boolean
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/main.yml'
-      - 'scripts/**'
-      - 'config/**'
   schedule:
-    - cron: '0 2 * * 1' # 每周一凌晨2点自动构建
-
-env:
-  REPO_URL: https://github.com/coolsnowwolf/lede
-  REPO_BRANCH: master
-  FEEDS_CONF: feeds.conf.default
-  DIY_P1_SH: scripts/diy.sh
-  DIY_P2_SH: scripts/config-manager.sh
-  UPLOAD_BIN_DIR: false
-  UPLOAD_FIRMWARE: true
-  UPLOAD_COWTRANSFER: false
-  UPLOAD_WETRANSFER: false
-  UPLOAD_RELEASE: false
-  TZ: Asia/Shanghai
-  PRODUCT_NAME: OpenWrt
+    - cron: '0 16 * * 4'  # 北京时间周五0点 (UTC+8)
+  workflow_dispatch:  # 仅保留手动触发
 
 jobs:
   generate-matrix:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
-      build-time: ${{ steps.set-matrix.outputs.build-time }}
+      build-time: ${{ steps.time.outputs.time }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
 
-      - name: 生成构建矩阵
+      - name: 📦 生成编译矩阵
         id: set-matrix
         run: |
-          # 设置构建时间
-          echo "build-time=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_OUTPUT
+          # 检查可用的配置文件
+          echo "📋 检查配置文件..."
+          ls -la configs/
           
-          # 生成构建矩阵
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            # 定时构建使用所有配置
-            echo 'matrix={"chip": ["ipq60xx"], "branch": ["main"], "config": ["libwrt"]}' >> $GITHUB_OUTPUT
-          else
-            # 手动触发使用选择的配置
-            echo 'matrix={"chip": ["ipq60xx"], "branch": ["main"], "config": ["${{ github.event.inputs.config || 'libwrt' }}"]}' >> $GITHUB_OUTPUT
-          fi
+          # 生成矩阵
+          matrix=$(jq -n -c \
+            --argjson chips '["ipq60xx"]' \
+            --argjson branches '["openwrt", "immwrt", "libwrt"]' \
+            --argjson configs '["Pro", "Max", "Ultra"]' \
+            '{
+              include: [
+                $chips[] as $chip | $branches[] as $branch | $configs[] as $config | {chip, branch, config}
+              ]
+            }')
+          
+          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+          echo "Generated matrix: $matrix"
 
+      - name: ⏰ 记录编译时间
+        id: time
+        run: |
+          echo "time=$(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+
+  # Job 1: 编译基础系统 - 为每个分支单独编译
   build-base:
     needs: generate-matrix
-    if: needs.generate-matrix.result == 'success'
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+      matrix:
+        branch: [openwrt, immwrt, libwrt]
     uses: ./.github/workflows/base-build.yml
     with:
-      config: ${{ matrix.config }}
-      ssh: ${{ github.event.inputs.ssh || 'false' }}
+      chip: ipq60xx
+      branch: ${{ matrix.branch }}
     secrets: inherit
 
+  # Job 2: 并行编译最终固件
   build-final:
     needs: [generate-matrix, build-base]
-    if: always() && needs.generate-matrix.result == 'success' && needs.build-base.result == 'success'
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     uses: ./.github/workflows/final-build.yml
     with:
+      chip: ${{ matrix.chip }}
+      branch: ${{ matrix.branch }}
       config: ${{ matrix.config }}
-      ssh: ${{ github.event.inputs.ssh || 'false' }}
       base-cache-key: ${{ needs.build-base.outputs[matrix.branch].cache-key }}
     secrets: inherit
 
