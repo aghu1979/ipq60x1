@@ -44,26 +44,51 @@ jobs:
           echo ""
           echo "📌 查找base配置文件:"
           find . -name "base_*.config" -type f 2>/dev/null
+          echo ""
+          echo "📋 输入参数:"
+          echo "  - chip: ${{ inputs.chip }}"
+          echo "  - branch: ${{ inputs.branch }}"
 
       - name: 🔑 生成缓存键
         id: cache-key
         run: |
+          echo "📋 开始生成缓存键..."
+          echo "  - chip: '${{ inputs.chip }}'"
+          echo "  - branch: '${{ inputs.branch }}'"
+          
           # 检查配置文件是否存在
-          if [ -f "configs/base_${{ inputs.chip }}.config" ]; then
-            CHIP_CONFIG="configs/base_${{ inputs.chip }}.config"
-          elif [ -f ".github/configs/base_${{ inputs.chip }}.config" ]; then
-            CHIP_CONFIG=".github/configs/base_${{ inputs.chip }}.config"
+          CHIP_CONFIG_FILE="base_${{ inputs.chip }}.config"
+          BRANCH_CONFIG_FILE="base_${{ inputs.branch }}.config"
+          
+          echo "📋 查找配置文件:"
+          echo "  - 芯片配置文件: $CHIP_CONFIG_FILE"
+          echo "  - 分支配置文件: $BRANCH_CONFIG_FILE"
+          
+          # 查找芯片配置文件
+          if [ -f "configs/$CHIP_CONFIG_FILE" ]; then
+            CHIP_CONFIG="configs/$CHIP_CONFIG_FILE"
+            echo "  ✅ 找到芯片配置: $CHIP_CONFIG"
+          elif [ -f ".github/configs/$CHIP_CONFIG_FILE" ]; then
+            CHIP_CONFIG=".github/configs/$CHIP_CONFIG_FILE"
+            echo "  ✅ 找到芯片配置: $CHIP_CONFIG"
           else
-            echo "❌ 找不到芯片配置文件: base_${{ inputs.chip }}.config"
+            echo "  ❌ 找不到芯片配置文件: $CHIP_CONFIG_FILE"
+            echo "📋 可用的芯片配置文件:"
+            find . -name "base_*.config" -type f 2>/dev/null | sed 's/^/    /'
             exit 1
           fi
           
-          if [ -f "configs/base_${{ inputs.branch }}.config" ]; then
-            BRANCH_CONFIG="configs/base_${{ inputs.branch }}.config"
-          elif [ -f ".github/configs/base_${{ inputs.branch }}.config" ]; then
-            BRANCH_CONFIG=".github/configs/base_${{ inputs.branch }}.config"
+          # 查找分支配置文件
+          if [ -f "configs/$BRANCH_CONFIG_FILE" ]; then
+            BRANCH_CONFIG="configs/$BRANCH_CONFIG_FILE"
+            echo "  ✅ 找到分支配置: $BRANCH_CONFIG"
+          elif [ -f ".github/configs/$BRANCH_CONFIG_FILE" ]; then
+            BRANCH_CONFIG=".github/configs/$BRANCH_CONFIG_FILE"
+            echo "  ✅ 找到分支配置: $BRANCH_CONFIG"
           else
-            echo "❌ 找不到分支配置文件: base_${{ inputs.branch }}.config"
+            echo "  ❌ 找不到分支配置文件: $BRANCH_CONFIG_FILE"
+            echo "📋 可用的分支配置文件:"
+            find . -name "base_*.config" -type f 2>/dev/null | grep "base_openwrt\|base_immwrt\|base_libwrt" | sed 's/^/    /'
             exit 1
           fi
           
@@ -77,7 +102,7 @@ jobs:
           echo "path=$BUILD_PATH" >> $GITHUB_OUTPUT
           echo "chip-config=$CHIP_CONFIG" >> $GITHUB_OUTPUT
           echo "branch-config=$BRANCH_CONFIG" >> $GITHUB_OUTPUT
-          echo "Generated cache key: $CACHE_KEY"
+          echo "✅ 缓存键生成完成: $CACHE_KEY"
 
       - name: 📦 恢复基础环境缓存
         id: cache
