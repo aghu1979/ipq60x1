@@ -1,0 +1,98 @@
+name: Build All Systems
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_packages:
+        description: '是否同时编译软件包'
+        required: true
+        default: true
+        type: boolean
+      packages:
+        description: '选择要编译的软件包（当include_packages为true时生效）'
+        required: false
+        default: 'Pro,Max,Ultra'
+        type: string
+  schedule:
+    - cron: '0 2 * * 1'  # 每周一凌晨2点自动编译所有
+
+jobs:
+  # 第一步：编译所有核心系统
+  build-all-cores:
+    uses: ./.github/workflows/build-core.yml
+    with:
+      build_all: true
+
+  # 第二步：编译所有软件包
+  build-all-packages:
+    needs: build-all-cores
+    if: inputs.include_packages == 'true'
+    uses: ./.github/workflows/build-packages.yml
+    with:
+      build_all: true
+      package: ${{ inputs.packages }}
+      core-map: core-map-${{ github.run_id }}
+    secrets: inherit
+
+  # 生成最终报告
+  generate-report:
+    needs: [build-all-cores, build-all-packages]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: 📥 下载所有产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-${{ github.run_id }}-*"
+          merge-multiple: true
+          path: all-artifacts
+
+      - name: 📊 生成编译报告
+        run: |
+          # 创建报告目录
+          mkdir -p reports
+          
+          # 统计核心系统
+          CORE_COUNT=$(find all-artifacts -name "core-build-*" -type d | wc -l)
+          FIRMWARE_COUNT=$(find all-artifacts -name "*.bin" -type f | wc -l)
+          REPORT_COUNT=$(find all-artifacts -name "*.md" -type f | wc -l)
+          
+          # 生成报告
+          cat > reports/build-report.md << EOF
+          # OpenWrt 编译报告
+          
+          **编译时间**: $(date)
+          **运行ID**: ${{ github.run_id }}
+          
+          ## 📊 编译统计
+          
+          - 核心系统数量: $CORE_COUNT
+          - 固件文件数量: $FIRMWARE_COUNT
+          - 报告文件数量: $REPORT_COUNT
+          
+          ## 📦 核心系统列表
+          
+          EOF
+          
+          # 列出所有核心系统
+          find all-artifacts -name "core-build-*" -type d | while read dir; do
+            echo "- $(basename $dir)" >> reports/build-report.md
+          done
+          
+          echo "" >> reports/build-report.md
+          echo "## 🔗 固件文件" >> reports/build-report.md
+          echo "" >> reports/build-report.md
+          
+          # 列出所有固件
+          find all-artifacts -name "*.bin" -type f | while read file; do
+            echo "- $(basename $file)" >> reports/build-report.md
+          done
+          
+          echo "✅ 报告生成完成"
+
+      - name: 📤 上传最终报告
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-report-${{ github.run_id }}
+          path: reports/
+          retention-days: 30
