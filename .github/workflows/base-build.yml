@@ -27,17 +27,56 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: 🔍 检查目录结构
+        run: |
+          echo "📌 当前工作目录: $(pwd)"
+          echo "📌 根目录内容:"
+          ls -la
+          echo ""
+          echo "📌 检查.github目录:"
+          ls -la .github/ 2>/dev/null || echo "❌ .github目录不存在"
+          echo ""
+          echo "📌 查找configs目录:"
+          find . -name "configs" -type d 2>/dev/null
+          echo ""
+          echo "📌 查找scripts目录:"
+          find . -name "scripts" -type d 2>/dev/null
+          echo ""
+          echo "📌 查找base配置文件:"
+          find . -name "base_*.config" -type f 2>/dev/null
+
       - name: 🔑 生成缓存键
         id: cache-key
         run: |
+          # 检查配置文件是否存在
+          if [ -f "configs/base_${{ inputs.chip }}.config" ]; then
+            CHIP_CONFIG="configs/base_${{ inputs.chip }}.config"
+          elif [ -f ".github/configs/base_${{ inputs.chip }}.config" ]; then
+            CHIP_CONFIG=".github/configs/base_${{ inputs.chip }}.config"
+          else
+            echo "❌ 找不到芯片配置文件: base_${{ inputs.chip }}.config"
+            exit 1
+          fi
+          
+          if [ -f "configs/base_${{ inputs.branch }}.config" ]; then
+            BRANCH_CONFIG="configs/base_${{ inputs.branch }}.config"
+          elif [ -f ".github/configs/base_${{ inputs.branch }}.config" ]; then
+            BRANCH_CONFIG=".github/configs/base_${{ inputs.branch }}.config"
+          else
+            echo "❌ 找不到分支配置文件: base_${{ inputs.branch }}.config"
+            exit 1
+          fi
+          
           # 生成基于配置的缓存键
-          CHIP_HASH=$(sha256sum configs/base_${{ inputs.chip }}.config | cut -d' ' -f1)
-          BRANCH_HASH=$(sha256sum configs/base_${{ inputs.branch }}.config | cut -d' ' -f1)
+          CHIP_HASH=$(sha256sum "$CHIP_CONFIG" | cut -d' ' -f1)
+          BRANCH_HASH=$(sha256sum "$BRANCH_CONFIG" | cut -d' ' -f1)
           CACHE_KEY="base-${{ inputs.chip }}-${{ inputs.branch }}-${CHIP_HASH:0:8}-${BRANCH_HASH:0:8}"
           BUILD_PATH="build-base-${{ inputs.chip }}-${{ inputs.branch }}"
           
           echo "key=$CACHE_KEY" >> $GITHUB_OUTPUT
           echo "path=$BUILD_PATH" >> $GITHUB_OUTPUT
+          echo "chip-config=$CHIP_CONFIG" >> $GITHUB_OUTPUT
+          echo "branch-config=$BRANCH_CONFIG" >> $GITHUB_OUTPUT
           echo "Generated cache key: $CACHE_KEY"
 
       - name: 📦 恢复基础环境缓存
@@ -54,10 +93,10 @@ jobs:
         run: |
           echo "🔧 准备基础编译环境..."
           echo "📌 当前工作目录: $(pwd)"
-          echo "📌 配置文件目录内容:"
-          ls -la configs/
-          echo "📌 脚本目录内容:"
-          ls -la scripts/
+          echo "📌 芯片: ${{ inputs.chip }}"
+          echo "📌 分支: ${{ inputs.branch }}"
+          echo "📌 芯片配置文件: ${{ steps.cache-key.outputs.chip-config }}"
+          echo "📌 分支配置文件: ${{ steps.cache-key.outputs.branch-config }}"
           
           # 创建构建目录
           mkdir -p ${{ steps.cache-key.outputs.path }}
@@ -75,6 +114,7 @@ jobs:
               ;;
             *)
               echo "❌ 不支持的分支: ${{ inputs.branch }}"
+              echo "💡 支持的分支: openwrt, immwrt, libwrt"
               exit 1
               ;;
           esac
@@ -89,35 +129,35 @@ jobs:
           
           # 保存芯片配置（用于对比）
           echo "📋 保存芯片配置..."
-          if [ -f "../configs/base_${{ inputs.chip }}.config" ]; then
-            cp "../configs/base_${{ inputs.chip }}.config" .config.chip
-            echo "✅ 已保存芯片配置"
-          else
-            echo "❌ 找不到芯片配置文件: configs/base_${{ inputs.chip }}.config"
-            exit 1
-          fi
+          cp "${{ steps.cache-key.outputs.chip-config }}" .config.chip
+          echo "✅ 已保存芯片配置"
           
           # 应用芯片配置
-          cp "../configs/base_${{ inputs.chip }}.config" .config
-          echo "✅ 已应用芯片配置: configs/base_${{ inputs.chip }}.config"
+          cp "${{ steps.cache-key.outputs.chip-config }}" .config
+          echo "✅ 已应用芯片配置"
           
           # 保存分支配置（用于对比）
-          if [ -f "../configs/base_${{ inputs.branch }}.config" ]; then
-            cp "../configs/base_${{ inputs.branch }}.config" .config.branch
-            echo "✅ 已保存分支配置"
+          cp "${{ steps.cache-key.outputs.branch-config }}" .config.branch
+          echo "✅ 已保存分支配置"
+          
+          # 追加分支配置
+          cat "${{ steps.cache-key.outputs.branch-config }}" >> .config
+          echo "✅ 已应用分支配置"
+          
+          # 查找并复制脚本文件
+          if [ -d "../scripts" ]; then
+            SCRIPT_DIR="../scripts"
+          elif [ -d ".github/scripts" ]; then
+            SCRIPT_DIR=".github/scripts"
           else
-            echo "❌ 找不到分支配置文件: configs/base_${{ inputs.branch }}.config"
+            echo "❌ 找不到scripts目录"
             exit 1
           fi
           
-          # 追加分支配置
-          cat "../configs/base_${{ inputs.branch }}.config" >> .config
-          echo "✅ 已应用分支配置: configs/base_${{ inputs.branch }}.config"
-          
-          # 复制脚本文件
-          cp ../scripts/diy.sh ./
-          cp ../scripts/repo.sh ./
-          cp ../scripts/compare-packages.sh ./
+          echo "📋 使用脚本目录: $SCRIPT_DIR"
+          cp "$SCRIPT_DIR/diy.sh" ./
+          cp "$SCRIPT_DIR/repo.sh" ./
+          cp "$SCRIPT_DIR/compare-packages.sh" ./
           chmod +x diy.sh repo.sh compare-packages.sh
           
           # 第一阶段：对比芯片配置和合并后的配置
@@ -147,7 +187,12 @@ jobs:
           make -j$(nproc) IGNORE_ERRORS=1 toolchain/compile
           
           # 保存对比报告
-          cp luci-packages-基础系统.md ../
+          if [ -f "luci-packages-基础系统.md" ]; then
+            cp luci-packages-基础系统.md ../
+            echo "✅ 已保存对比报告"
+          else
+            echo "⚠️ 对比报告未生成"
+          fi
           
           # 返回上级目录
           cd ..
@@ -165,3 +210,4 @@ jobs:
           path: |
             luci-packages-基础系统.md
           retention-days: 7
+          if-no-files-found: warn
