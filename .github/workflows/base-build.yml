@@ -9,9 +9,6 @@ on:
       branch:
         required: true
         type: string
-    outputs:
-      cache-key: ${{ jobs.build-base.outputs.cache-key }}
-      build-path: ${{ jobs.build-base.outputs.build-path }}
 
 jobs:
   build-base:
