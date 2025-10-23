@@ -96,8 +96,10 @@ check_params() {
 
 # 提取LUCI软件包
 extract_luci_packages() {
+    # 修复：使用更可靠的方法提取软件包
     grep "^CONFIG_PACKAGE_luci-" "$CONFIG_FILE" 2>/dev/null | \
-    sed 's/^CONFIG_PACKAGE_\(.*\)=\(.*\)/\1=\2/' | sort
+    sed 's/^CONFIG_PACKAGE_luci-\([^=]*\)=\(.*\)/\1=\2/' | \
+    grep -v '^$' | sort
 }
 
 # 检查软件包是否存在
@@ -221,7 +223,7 @@ check_packages() {
     log_info "提取LUCI软件包列表..."
     
     local luci_packages=$(extract_luci_packages)
-    local total_packages=$(echo "$luci_packages" | wc -l)
+    local total_packages=$(echo "$luci_packages" | grep -c '.' || echo 0)
     
     if [ $total_packages -eq 0 ]; then
         log_warning "配置文件中没有LUCI软件包"
