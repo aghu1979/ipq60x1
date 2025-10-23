@@ -1,0 +1,47 @@
+name: Build Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      core-artifact:
+        description: '核心系统Artifact名称'
+        required: true
+      package:
+        description: '软件包配置'
+        required: true
+        default: 'Pro'
+        type: choice
+        options:
+          - Pro
+          - Max
+          - Ultra
+
+jobs:
+  build-packages:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+
+      - name: 📦 下载核心系统
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.core-artifact }}
+          path: core-system
+
+      - name: 🔧 编译软件包
+        run: |
+          # 执行软件包编译脚本
+          chmod +x scripts/build-packages.sh
+          ./scripts/build-packages.sh \
+            --package "${{ inputs.package }}" \
+            --core-path "core-system"
+
+      - name: 📤 上传固件
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ inputs.package }}-${{ github.run_id }}
+          path: |
+            firmware/
+            reports/
+          retention-days: 7
