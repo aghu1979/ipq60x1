@@ -1,5 +1,5 @@
 #!/bin/bash
-# OpenWrt软件包对比脚本
+# 核心系统编译脚本
 
 set -e
 
@@ -12,10 +12,9 @@ NC='\033[0m'
 
 # 图标定义
 ICON_SUCCESS="✅"
-ICON_ERROR="❌"
-ICON_WARNING="⚠️"
 ICON_INFO="ℹ️"
-ICON_PACKAGE="📦"
+ICON_CONFIG="🔧"
+ICON_WARNING="⚠️"
 
 # 日志函数
 log_info() {
@@ -26,247 +25,158 @@ log_success() {
     echo -e "${GREEN}${ICON_SUCCESS} $1${NC}"
 }
 
-log_error() {
-    echo -e "${RED}${ICON_ERROR} $1${NC}"
+log_config() {
+    echo -e "${YELLOW}${ICON_CONFIG} $1${NC}"
 }
 
 log_warning() {
     echo -e "${YELLOW}${ICON_WARNING} $1${NC}"
 }
 
-# 显示帮助信息
-show_help() {
-    cat << EOF
-OpenWrt软件包对比脚本
+# 参数解析
+CHIP=""
+BRANCH=""
+BUILD_PATH=""
 
-用法: $0 <配置文件1> <配置文件2> [报告名称]
-
-参数:
-  配置文件1    第一个配置文件路径
-  配置文件2    第二个配置文件路径
-  报告名称    报告文件名前缀 (可选)
-
-示例:
-  $0 .config.old .config.new "配置变更"
-  $0 .config.base .config.user "用户配置对比"
-
-EOF
-}
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --chip)
+            CHIP="$2"
+            shift 2
+            ;;
+        --branch)
+            BRANCH="$2"
+            shift 2
+            ;;
+        --path)
+            BUILD_PATH="$2"
+            shift 2
+            ;;
+        *)
+            echo "未知参数: $1"
+            exit 1
+            ;;
+    esac
+done
 
 # 检查参数
-check_params() {
-    if [ $# -lt 2 ]; then
-        log_error "请提供两个配置文件路径"
-        show_help
-        exit 1
-    fi
-    
-    if [ ! -f "$1" ]; then
-        log_error "配置文件1不存在: $1"
-        exit 1
-    fi
-    
-    if [ ! -f "$2" ]; then
-        log_error "配置文件2不存在: $2"
-        exit 1
-    fi
-}
-
-# 提取LUCI软件包
-extract_luci_packages() {
-    local config_file=$1
-    # 修复：使用更可靠的方法提取软件包
-    grep "^CONFIG_PACKAGE_luci-" "$config_file" 2>/dev/null | \
-    sed -n 's/^CONFIG_PACKAGE_luci-\([^=]*)=\(.*\)/\1=\2/' | \
-    grep -v '^$' | sort
-}
-
-# 主对比函数
-compare_packages() {
-    local config1=$1
-    local config2=$2
-    local report_name=${3:-"软件包对比"
-    local report_file="${report_name}.md"
-    
-    log_info "开始对比LUCI软件包..."
-    log_info "配置文件1: $config1"
-    log_info "配置文件2: $config2"
-    
-    # 提取软件包
-    local packages1=$(extract_luci_packages "$config1")
-    local packages2=$(extract_luci_packages "$config2")
-    
-    local total1=$(echo "$packages1" | grep -c '.' || echo 0)
-    local total2=$(echo "$packages2" | grep -c '.' || echo 0)
-    
-    log_info "配置1软件包数: $total1"
-    log_info "配置2软件包数: $total2"
-    
-    # 调试输出
-    log_info "配置1软件包列表:"
-    echo "$packages1" | sed 's/^/  /'
-    log_info "配置2软件包列表:"
-    echo "$packages2" | sed 's/^/  /'
-    
-    # 创建临时文件
-    local temp1=$(mktemp)
-    local temp2=$(mktemp)
-    trap "rm -f $temp1 $temp2" EXIT
-    
-    echo "$packages1" > "$temp1"
-    echo "$packages2" > "$temp2"
-    
-    # 生成报告
-    cat > "$report_file" << EOF
-# $report_name
-
-**对比时间**: $(date)  
-**配置文件1**: $config1  
-**配置文件2**: $config2  
-
-## 📊 软件包统计
-
-| 项目 | 软件包数量 |
-|------|-----------|
-| 配置1 | $total1 |
-| 配置2 | $total2 |
-| 差异 | $((total2 - total1)) |
-
-## 📋 软件详细对比
-
-EOF
-    
-    # 找出新增的软件包
-    local added=$(comm -13 "$temp1" "$temp2")
-    if [ -n "$added" ]; then
-        log_info "新增的软件包:"
-        echo "$added" | while IFS= read -r line; do
-            local pkg=$(echo "$line" | cut -d'=' -f1)
-            local status=$(echo "$line" | cut -d'=' -f2)
-            echo "  + $pkg ($status)"
-        done
-        
-        cat >> "$report_file" << EOF
-### ✅ 新增的软件包
-
-| 软件 | 状态 | 说明 |
-|--------|------|------|
-EOF
-        echo "$added" | while IFS= read -r line; do
-            local pkg=$(echo "$line" | cut -d'=' -f1)
-            local status=$(echo "$line" | cut -d'=' -f2)
-            echo "| $pkg | $status | 新增安装 |" >> "$report_file"
-        done
-        echo "" >> "$report_file"
-    fi
-    
-    # 找出删除的软件包
-    local removed=$(comm -23 "$temp1" "$temp2")
-    if [ -n "$removed" ]; then
-        log_info "删除的软件包:"
-        echo "$removed" | while IFS= read -r line; do
-            local pkg=$(echo "$line" | cut -d'=' -f1)
-            local status=$(echo "$line" | cut -d'=' -f2)
-            echo "  - $pkg ($status)"
-        done
-        
-        cat >> "$report_file" << EOF
-### ❌ 删除的软件包
-
-| 软件 | 状态 | 说明 |
-|--------|------|------|
-EOF
-        echo "$removed" | while IFS= read -r line; do
-            local pkg=$(echo "$line" | cut -d'=' -f1)
-            local status=$(echo "$line" | cut -d'=' -f2)
-            echo "| $pkg | $status | 已移除 |" >> "$report_file"
-        done
-        echo "" >> "$report_file"
-    fi
-    
-    # 找出状态改变的软件包
-    local changed_count=0
-    cat >> "$report_file" << EOF
-### 🔄 状态改变的软件包
-
-| 软件 | 状态 | 说明 |
-|--------|------|------|
-EOF
-    
-    # 创建状态映射
-    declare -A status1 status2
-    while IFS='=' read -r pkg status; do
-        if [ -n "$pkg" ]; then
-            status1["$pkg"]="$status"
-        fi
-    done < "$temp1"
-    
-    while IFS='=' read -r pkg status; do
-        if [ -n "$pkg" ]; then
-            status2["$pkg"]="$status"
-        fi
-    done < "$temp2"
-    
-    # 检查状态改变
-    for pkg in "${!status1[@]}"; do
-        # 修复：检查软件包是否在第二个配置中存在
-        if [[ -n "${status2[$pkg]}" && "${status1[$pkg]}" != "${status2[$pkg]}" ]; then
-            echo "  🔄 $pkg (${status1[$pkg]} → ${status2[$pkg]})"
-            echo "| $pkg | ${status1[$pkg]} → ${status2[$pkg]} | 状态改变 |" >> "$report_file"
-            ((changed_count++))
-        fi
-    done
-    
-    if [ $changed_count -eq 0 ]; then
-        echo "| 无 | 无 | 无状态改变 |" >> "$report_file"
-    fi
-    echo "" >> "$report_file"
-    
-    # 添加完整软件包列表
-    cat >> "$report_file" << EOF
-## 📦 完整软件包列表
-
-### 配置1中的软件包
-| 软件 | 瓁 | 
-|--------|------|------|
-EOF
-    echo "$packages1" | while IFS='=' read -r pkg status; do
-        echo "| $pkg | $status |" >> "$report_file"
-    done
-    
-    cat >> "$report_file" << EOF
-
-### 配置2中的软件包
-| 软件 | 状态 | 
-|--------|------|------|
-EOF
-    echo "$packages2" | while IFS='=' read -r pkg status; do
-        echo "| $pkg | $status |" >> "$report_file"
-    done
-    
-    # 输出摘要
-    local added_count=$(echo "$added" | grep -c '.' || echo 0)
-    local removed_count=$(echo "$removed" | grep -c '.' || echo 0)
-    
-    log_info "对比摘要:"
-    echo "  - 新增软件包: $added_count"
-    echo "  - 删除软件包: $removed_count"
-    echo "  - 状态改变: $changed_count"
-    echo "  - 报告文件: $report_file"
-    
-    log_success "软件包对比完成！"
-}
-
-# 主函数
-main() {
-    # 检查参数
-    check_params "$@"
-    
-    # 执行对比
-    compare_packages "$@"
-}
-
-# 如果直接运行脚本
-if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-    main "$@"
+if [ -z "$CHIP" ] || [ -z "$BRANCH" ] || [ -z "$BUILD_PATH" ]; then
+    echo "用法: $0 --chip <芯片> --branch <分支> --path <构建路径>"
+    exit 1
 fi
+
+log_info "开始编译核心系统..."
+log_info "芯片: $CHIP"
+log_info "分支: $BRANCH"
+log_info "构建路径: $BUILD_PATH"
+
+# 设置源码仓库
+case "$BRANCH" in
+    "openwrt")
+        REPO_URL="https://github.com/laipeng668/openwrt.git"
+        REPO_BRANCH="master"
+        ;;
+    "immwrt")
+        REPO_URL="https://github.com/laipeng668/immortalwrt.git"
+        REPO_BRANCH="master"
+        ;;
+    "libwrt")
+        REPO_URL="https://github.com/laipeng668/openwrt-6.x.git"
+        REPO_BRANCH="k6.12-nss"
+        ;;
+    *)
+        log_warning "不支持的分支: $BRANCH"
+        exit 1
+        ;;
+esac
+
+# 创建构建目录
+mkdir -p "$BUILD_PATH"
+cd "$BUILD_PATH"
+
+# 克隆源码
+log_info "克隆源码: $REPO_URL"
+git clone --depth=1 -b "$REPO_BRANCH" "$REPO_URL" openwrt
+cd openwrt
+
+# 合并配置文件
+log_config "合并配置文件..."
+
+# 应用芯片配置
+if [ -f "../../configs/base_${CHIP}.config" ]; then
+    cp "../../configs/base_${CHIP}.config" .config.chip
+    cp "../../configs/base_${CHIP}.config" .config
+    log_success "已应用芯片配置: base_${CHIP}.config"
+else
+    log_warning "芯片配置文件不存在: configs/base_${CHIP}.config"
+    exit 1
+fi
+
+# 应用分支配置
+if [ -f "../../configs/base_${BRANCH}.config" ]; then
+    cp "../../configs/base_${BRANCH}.config" .config.branch
+    cat "../../configs/base_${BRANCH}.config" >> .config
+    log_success "已应用分支配置: base_${BRANCH}.config"
+else
+    log_warning "分支配置文件不存在: configs/base_${BRANCH}.config"
+    exit 1
+fi
+
+# 第一次defconfig - 补全基础配置依赖
+log_config "第一次 make defconfig..."
+make defconfig
+BEFORE_COUNT=$(grep -c '^CONFIG_PACKAGE_luci-' .config || echo 0)
+log_info "补全前LUCI软件包数: $BEFORE_COUNT"
+
+# 复制脚本
+cp ../../scripts/check-luci.sh ./
+cp ../../scripts/compare-config.sh ./
+cp ../../scripts/diy.sh ./
+cp ../../scripts/repo.sh ./
+chmod +x check-luci.sh compare-config.sh diy.sh repo.sh
+
+# 检查LUCI软件包
+log_config "检查LUCI软件包..."
+./check-luci.sh .config "核心系统-初始检查" false
+
+# 对比配置差异
+log_config "对比配置差异..."
+./compare-config.sh .config.chip .config "芯片配置→核心系统"
+
+# 执行初始化
+log_config "执行系统初始化..."
+./diy.sh
+
+# 添加第三方软件源
+log_config "添加第三方软件源..."
+./repo.sh --add-common
+
+# 更新feeds
+log_config "更新软件源..."
+./scripts/feeds update -a
+./scripts/feeds install -a
+
+# 第二次defconfig - 补全feeds后的配置
+log_config "第二次 make defconfig..."
+make defconfig
+AFTER_COUNT=$(grep -c '^CONFIG_PACKAGE_luci-' .config || echo 0)
+log_info "补全后LUCI软件包数: $AFTER_COUNT"
+
+# 对比feeds更新前后的差异
+log_config "对比feeds更新前后差异..."
+./compare-config.sh .config.chip .config "芯片配置→最终核心系统"
+
+# 最终LUCI检查
+log_config "最终LUCI软件包检查..."
+./check-luci.sh .config "核心系统-最终检查" true
+
+# 编译工具链
+log_config "编译工具链..."
+make -j$(nproc) IGNORE_ERRORS=1 tools/compile
+make -j$(nproc) IGNORE_ERRORS=1 toolchain/compile
+
+# 保存报告
+mkdir -p ../reports
+cp *.md ../reports/ 2>/dev/null || true
+
+log_success "核心系统编译完成！"
