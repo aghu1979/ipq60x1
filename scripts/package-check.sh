@@ -97,7 +97,7 @@ check_params() {
 # 提取LUCI软件包
 extract_luci_packages() {
     grep "^CONFIG_PACKAGE_luci-" "$CONFIG_FILE" 2>/dev/null | \
-    sed 's/^CONFIG_PACKAGE_\(.*\)=y/\1/' | sort
+    sed 's/^CONFIG_PACKAGE_\(.*\)=\(.*\)/\1=\2/' | sort
 }
 
 # 检查软件包是否存在
@@ -238,12 +238,22 @@ EOF
     
     log_info "发现 $total_packages 个LUCI软件包"
     
+    # 调试输出
+    log_info "软件包列表:"
+    echo "$luci_packages" | sed 's/^/  /'
+    
     # 生成报告头部
     generate_report_header $total_packages
     
     # 检查每个软件包
-    while IFS= read -r pkg; do
-        if [ -n "$pkg" ]; then
+    while IFS= read -r pkg_line; do
+        if [ -n "$pkg_line" ]; then
+            # 修复：正确解析软件包名称和状态
+            local pkg=$(echo "$pkg_line" | cut -d'=' -f1)
+            local status=$(echo "$pkg_line" | cut -d'=' -f2)
+            
+            log_info "检查软件包: $pkg (状态: $status)"
+            
             local location=$(get_package_location "$pkg")
             
             if [ "$location" != "缺失" ]; then
