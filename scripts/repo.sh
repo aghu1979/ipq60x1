@@ -1,47 +1,30 @@
 #!/bin/bash
-# scripts/repo.sh
-# 功能: 添加第三方软件源
-# 作者: Mary
+# 第三方软件源管理脚本
+# 功能：添加kenzok8/small-package软件源
 
-#!/bin/bash
+REPO_URL="https://github.com/kenzok8/small-package"
+REPO_NAME="kenzok8"
+REPO_BRANCH="main"
 
-# 定义颜色和图标
-COLOR_GREEN='\033[0;32m'
-COLOR_RED='\033[0;31m'
-COLOR_YELLOW='\033[0;33m'
-COLOR_BLUE='\033[0;34m'
-COLOR_PURPLE='\033[0;35m'
-COLOR_CYAN='\033[0;36m'
-COLOR_RESET='\033[0m'
-ICON_START='🚀'
-ICON_SUCCESS='✅'
-ICON_ERROR='❌'
-ICON_WARNING='⚠️'
-ICON_INFO='ℹ️'
-ICON_PACKAGE='📦'
-ICON_CONFIG='⚙️'
+echo "📦 开始添加第三方软件源..."
 
-# 输出开始信息
-echo -e "${COLOR_CYAN}${ICON_START} 开始添加第三方软件源${COLOR_RESET}"
-
-# 添加kenzok8/small-package第三方软件源
-echo -e "${COLOR_BLUE}${ICON_PACKAGE} 添加kenzok8/small-package软件源${COLOR_RESET}"
-
-# 检查feeds.conf.default文件是否存在
-if [ -f "feeds.conf.default" ]; then
-    # 备份原始文件
-    cp feeds.conf.default feeds.conf.default.bak
-    
-    # 添加第三方软件源
-    echo "src-git small_package https://github.com/kenzok8/small-package" >> feeds.conf.default
-    
-    # 输出成功信息
-    echo -e "${COLOR_GREEN}${ICON_SUCCESS} 第三方软件源添加成功${COLOR_RESET}"
+# 检查是否已存在
+if [ -d "feeds/$REPO_NAME" ]; then
+  echo "⚠️  软件源已存在，更新中..."
+  cd feeds/$REPO_NAME
+  git pull origin $REPO_BRANCH
 else
-    # 输出错误信息
-    echo -e "${COLOR_RED}${ICON_ERROR} feeds.conf.default文件不存在${COLOR_RESET}"
-    exit 1
+  echo "🔽 克隆软件源..."
+  git clone -b $REPO_BRANCH $REPO_URL feeds/$REPO_NAME
 fi
 
-# 输出结束信息
-echo -e "${COLOR_GREEN}${ICON_SUCCESS} 第三方软件源添加完成${COLOR_RESET}"
+# 更新软件包索引
+echo "🔄 更新软件包索引..."
+./scripts/feeds update -a
+./scripts/feeds install -a
+
+echo "✅ 第三方软件源添加完成！"
+echo "📌 软件源信息："
+echo "   - 仓库: $REPO_URL"
+echo "   - 分支: $REPO_BRANCH"
+echo "   - 本地路径: feeds/$REPO_NAME"
