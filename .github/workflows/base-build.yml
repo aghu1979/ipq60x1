@@ -278,12 +278,22 @@ jobs:
           make -j$(nproc) IGNORE_ERRORS=1 toolchain/compile
           
           # 保存报告到上级目录
+          echo ""
+          echo "📋 保存报告文件..."
           if [ -f "基础系统-最终检查.md" ]; then
             cp 基础系统-最终检查.md ../luci-packages-基础系统-${{ inputs.branch }}.md
             echo "✅ 已保存对比报告: luci-packages-基础系统-${{ inputs.branch }}.md"
           else
-            echo "⚠️ 对比报告未生成"
+            echo "⚠️ 最终检查报告未生成"
           fi
+          
+          # 检查其他报告文件
+          for report in 基础系统-初步检查.md 基础系统.md; do
+            if [ -f "$report" ]; then
+              cp "$report" ../" 
+              echo "✅ 已保存报告: $report"
+            fi
+          done
           
           # 返回上级目录
           cd ..
@@ -300,5 +310,7 @@ jobs:
           name: base-report-${{ inputs.branch }}-${{ github.run_id }}
           path: |
             luci-packages-基础系统-${{ inputs.branch }}.md
+            基础系统-初步检查.md
+            基础系统.md
           retention-days: 7
           if-no-files-found: warn
