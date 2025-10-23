@@ -16,7 +16,6 @@ jobs:
     outputs:
       cache-key: ${{ steps.cache-key.outputs.key }}
       build-path: ${{ steps.cache-key.outputs.path }}
-      cache-info: ${{ steps.cache-info.outputs.json }}
     steps:
       - name: 🛠️ 初始化环境
         run: |
@@ -104,23 +103,6 @@ jobs:
           echo "chip-config=$CHIP_CONFIG" >> $GITHUB_OUTPUT
           echo "branch-config=$BRANCH_CONFIG" >> $GITHUB_OUTPUT
           echo "✅ 缓存键生成完成: $CACHE_KEY"
-
-      - name: 📋 生成缓存信息
-        id: cache-info
-        run: |
-          # 生成包含所有缓存信息的JSON（压缩为一行）
-          CACHE_INFO=$(jq -c -n \
-            --arg branch "${{ inputs.branch }}" \
-            --arg key "${{ steps.cache-key.outputs.key }}" \
-            --arg path "${{ steps.cache-key.outputs.path }}" \
-            '{
-              ($branch): {
-                "cache-key": $key,
-                "build-path": $path
-              }
-            }')
-          echo "json=$CACHE_INFO" >> $GITHUB_OUTPUT
-          echo "📋 缓存信息: $CACHE_INFO"
 
       - name: 📦 恢复基础环境缓存
         id: cache
@@ -301,20 +283,6 @@ jobs:
           make -j$(nproc) IGNORE_ERRORS=1 tools/compile
           make -j$(nproc) IGNORE_ERRORS=1 toolchain/compile
           
-          # 保存报告到上级目录
-          echo ""
-          echo "📋 保存报告文件..."
-          echo "📋 检查生成的报告文件..."
-          ls -la *.md 2>/dev/null || echo "没有找到报告文件"
-          
-          # 复制所有.md文件到上级目录
-          for report in *.md; do
-            if [ -f "$report" ]; then
-              cp "$report" "../luci-packages-基础系统-${{ inputs.branch }}.md"
-              echo "✅ 已保存报告: $report"
-            fi
-          done
-          
           # 返回上级目录
           cd ..
           
@@ -323,69 +291,21 @@ jobs:
           tar -czf ${{ steps.cache-key.outputs.path }}/base.tar.gz -C openwrt-src .
           echo "✅ 基础环境准备完成"
 
-      - name: 📋 处理缓存命中的报告
-        if: steps.cache.outputs.cache-hit == 'true'
-        run: |
-          echo "📋 缓存命中，从缓存中提取报告文件..."
-          
-          # 解压缓存中的报告文件
-          BUILD_PATH="${{ steps.cache-key.outputs.path }}"
-          echo "📌 构建路径: $BUILD_PATH"
-          
-          if [ -f "$BUILD_PATH/base.tar.gz" ]; then
-            echo "📦 解压缓存文件..."
-            mkdir -p temp-extract
-            tar -xzf "$BUILD_PATH/base.tar.gz" -C temp-extract
-            
-            # 查找并复制报告文件
-            echo "📋 查找报告文件..."
-            find temp-extract -name "*.md" -type f -exec echo "找到报告: {}" \;
-            
-            # 复制所有.md文件到当前目录
-            find temp-extract -name "*.md" -type f -exec cp {} . \;
-            
-            # 复制到上级目录 - 修复引号问题
-            for report in 基础系统-最终检查.md 基础系统-初步检查.md 基础系统.md; do
-              if [ -f "temp-extract/$report" ]; then
-                cp "temp-extract/$report" "../luci-packages-基础系统-${{ inputs.branch }}.md"
-                echo "✅ 已提取报告: $report"
-              fi
-            done
-            
-            # 清理临时目录
-            rm -rf temp-extract
-            
-            # 检查报告文件
-            echo "📋 检查报告文件..."
-            ls -la *.md 2>/dev/null || echo "没有找到报告文件"
-          else
-            echo "❌ 缓存中没有找到base.tar.gz文件"
-            echo "📋 检查构建路径内容:"
-            ls -la "$BUILD_PATH" 2>/dev/null || echo "构建路径不存在"
-          fi
-
       - name: 📤 上传基础系统报告
         if: always()
         run: |
-          echo "📋 检查报告文件..."
-          ls -la *.md 2>/dev/null || echo "没有找到报告文件"
-          
           # 创建临时目录用于上传
           mkdir -p upload-reports
           
-          # 复制所有可能的报告文件 - 修复文件名匹配问题
-          for report in luci-packages-基础系统-${{ inputs.branch }}.md 基础系统-初步检查.md 基础系统.md luci-packages-基础系统.md; do
-            if [ -f "$report" ]; then
-              cp "$report" upload-reports/
-              echo "✅ 找到报告文件: $report"
-            else
-              echo "⚠️ 报告文件不存在: $report"
-            fi
-          done
+          # 只上传实际存在的报告文件
+          if [ -f "luci-packages-基础系统.md" ]; then
+            cp "luci-packages-基础系统.md" upload-reports/
+            echo "✅ 找到报告文件: luci-packages-基础系统.md"
+          fi
           
           # 显示上传目录内容
           echo "📋 上传目录内容:"
-          ls -la upload-reports/
+          ls -la upload-reports/ || echo "没有报告文件"
 
       - name: 📤 上传基础系统报告
         if: always()
