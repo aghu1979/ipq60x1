@@ -1,6 +1,6 @@
 #!/bin/bash
-# OpenWrt配置管理脚本
-# 功能：合并配置文件、检查软件包、生成报告
+# OpenWrt软件包对比脚本
+# 功能：对比两个配置文件中的软件包差异
 
 set -e
 
@@ -16,7 +16,6 @@ ICON_SUCCESS="✅"
 ICON_ERROR="❌"
 ICON_WARNING="⚠️"
 ICON_INFO="ℹ️"
-ICON_CONFIG="🔧"
 ICON_PACKAGE="📦"
 
 # 日志函数
@@ -32,277 +31,231 @@ log_error() {
     echo -e "${RED}${ICON_ERROR} $1${NC}"
 }
 
-log_warning() {
-    echo -e "${YELLOW}${ICON_WARNING} $1${NC}"
-}
-
-log_config() {
-    echo -e "${YELLOW}${ICON_CONFIG} $1${NC}"
-}
-
 # 显示帮助信息
 show_help() {
     cat << EOF
-OpenWrt配置管理脚本
+OpenWrt软件包对比脚本
 
-用法: $0 <命令> [参数]
+用法: $0 <配置文件1> <配置文件2> [报告名称]
 
-命令:
-  merge <base_config> <user_config> <output>    合并配置文件
-  check <config_file> [report_name] [auto_fix]  检查LUCI软件包
-  compare <config1> <config2> [report_name]     对比配置文件
-  validate <config_file>                       验证配置文件
+参数:
+  配置文件1    第一个配置文件路径
+  配置文件2    第二个配置文件路径
+  报告名称    报告文件名前缀 (可选)
 
 示例:
-  $0 merge .config.base .config.user .config
-  $0 check .config "最终检查" true
-  $0 compare .config.old .config.new "配置对比"
+  $0 .config.old .config.new "配置变更"
+  $0 .config.base .config.user "用户配置对比"
 
 EOF
 }
 
-# 检查是否在OpenWrt目录
-check_opnwrt_dir() {
-    if [ ! -f "rules.mk" ] || [ ! -d "package" ]; then
-        log_error "请在OpenWrt源码目录中运行此脚本"
-        exit 1
-    fi
-}
-
-# 合并配置文件
-merge_configs() {
-    local base_config=$1
-    local user_config=$2
-    local output_config=$3
-    
-    log_config "合并配置文件..."
-    log_info "基础配置: $base_config"
-    log_info "用户配置: $user_config"
-    log_info "输出配置: $output_config"
-    
-    # 检查文件是否存在
-    if [ ! -f "$base_config" ]; then
-        log_error "基础配置文件不存在: $base_config"
-        exit 1
-    fi
-    
-    if [ ! -f "$user_config" ]; then
-        log_error "用户配置文件不存在: $user_config"
-        exit 1
-    fi
-    
-    # 复制基础配置
-    cp "$base_config" "$output_config"
-    
-    # 统计配置项
-    local base_count=$(grep -c '^CONFIG_' "$base_config" 2>/dev/null || echo 0)
-    local user_count=$(grep -c '^CONFIG_' "$user_config" 2>/dev/null || echo 0)
-    
-    log_info "基础配置项数: $base_count"
-    log_info "用户配置项数: $user_count"
-    
-    # 合并用户配置
-    local merged_count=0
-    local updated_count=0
-    
-    while IFS= read -r line; do
-        if [[ $line =~ ^CONFIG_ ]]; then
-            local key=$(echo "$line" | cut -d'=' -f1)
-            
-            if grep -q "^$key=" "$output_config"; then
-                # 更新现有配置
-                sed -i "s|^$key=.*|$line|" "$output_config"
-                ((updated_count++))
-            else
-                # 添加新配置
-                echo "$line" >> "$output_config"
-                ((merged_count++))
-            fi
-        fi
-    done < "$user_config"
-    
-    # 生成最终配置
-    log_info "运行 make defconfig..."
-    make defconfig
-    
-    local final_count=$(grep -c '^CONFIG_' "$output_config" 2>/dev/null || echo 0)
-    
-    log_success "配置合并完成！"
-    log_info "合并统计:"
-    echo "  - 新增配置项: $merged_count"
-    echo "  - 更新配置项: $updated_count"
-    echo "  - 最终配置项数: $final_count"
-}
-
-# 检查LUCI软件包（调用package-check.sh）
-check_packages() {
-    local config_file=$1
-    local report_name=${2:-"软件包检查"}
-    local auto_fix=${3:-"true"}
-    
-    # 查找package-check.sh脚本
-    local check_script=""
-    if [ -f "scripts/package-check.sh" ]; then
-        check_script="scripts/package-check.sh"
-    elif [ -f ".github/scripts/package-check.sh" ]; then
-        check_script=".github/scripts/package-check.sh"
-    else
-        log_error "找不到package-check.sh脚本"
-        exit 1
-    fi
-    
-    log_info "执行LUCI软件包检查..."
-    "$check_script" "$config_file" "$report_name" "$auto_fix"
-}
-
-# 对比配置文件
-compare_configs() {
-    local config1=$1
-    local config2=$2
-    local report_name=${3:-"配置对比"}
-    
-    log_config "对比配置文件..."
-    log_info "配置文件1: $config1"
-    log_info "配置文件2: $config2"
-    
-    # 查找compare-packages.sh脚本
-    local compare_script=""
-    if [ -f "scripts/compare-packages.sh" ]; then
-        compare_script="scripts/compare-packages.sh"
-    elif [ -f ".github/scripts/compare-packages.sh" ]; then
-        compare_script=".github/scripts/compare-packages.sh"
-    else
-        log_error "找不到compare-packages.sh脚本"
-        exit 1
-    fi
-    
-    "$compare_script" "$config1" "$config2" "$report_name"
-}
-
-# 验证配置文件
-validate_config() {
-    local config_file=$1
-    
-    log_config "验证配置文件: $config_file"
-    
-    if [ ! -f "$config_file" ]; then
-        log_error "配置文件不存在: $config_file"
-        exit 1
-    fi
-    
-    # 检查配置文件格式
-    local invalid_lines=$(grep -v '^CONFIG_' "$config_file" | grep -v '^#' | grep -v '^$' | wc -l)
-    if [ $invalid_lines -gt 0 ]; then
-        log_warning "发现 $invalid_lines 行无效配置"
-    fi
-    
-    # 检查配置项数量
-    local config_count=$(grep -c '^CONFIG_' "$config_file" 2>/dev/null || echo 0)
-    log_info "配置项总数: $config_count"
-    
-    # 检查是否有目标配置
-    if ! grep -q '^CONFIG_TARGET_' "$config_file"; then
-        log_warning "未找到目标配置（CONFIG_TARGET_*）"
-    fi
-    
-    # 运行defconfig验证
-    log_info "运行 make defconfig 验证..."
-    if make defconfig; then
-        log_success "配置文件验证通过！"
-    else
-        log_error "配置文件验证失败！"
-        exit 1
-    fi
-}
-
-# 主函数
-main() {
-    local command=""
-    local param1=""
-    local param2=""
-    local param3=""
-    
-    # 解析参数
-    if [ $# -eq 0 ]; then
+# 检查参数
+check_params() {
+    if [ $# -lt 2 ]; then
+        log_error "请提供两个配置文件路径"
         show_help
         exit 1
     fi
     
-    command=$1
-    shift
+    if [ ! -f "$1" ]; then
+        log_error "配置文件1不存在: $1"
+        exit 1
+    fi
     
-    case $command in
-        merge)
-            if [ $# -lt 3 ]; then
-                log_error "merge命令需要3个参数"
-                show_help
-                exit 1
-            fi
-            param1=$1
-            param2=$2
-            param3=$3
-            shift 3
-            ;;
-        check)
-            if [ $# -lt 1 ]; then
-                log_error "check命令需要至少1个参数"
-                show_help
-                exit 1
-            fi
-            param1=$1
-            param2=${2:-"软件包检查"}
-            param3=${3:-"true"}
-            shift 3
-            ;;
-        compare)
-            if [ $# -lt 2 ]; then
-                log_error "compare命令需要至少2个参数"
-                show_help
-                exit 1
-            fi
-            param1=$1
-            param2=$2
-            param3=${3:-"配置对比"}
-            shift 3
-            ;;
-        validate)
-            if [ $# -lt 1 ]; then
-                log_error "validate命令需要1个参数"
-                show_help
-                exit 1
-            fi
-            param1=$1
-            shift
-            ;;
-        -h|--help)
-            show_help
-            exit 0
-            ;;
-        *)
-            log_error "未知命令: $command"
-            show_help
-            exit 1
-            ;;
-    esac
+    if [ ! -f "$2" ]; then
+        log_error "配置文件2不存在: $2"
+        exit 1
+    fi
+}
+
+# 提取LUCI软件包
+extract_luci_packages() {
+    local config_file=$1
+    grep "^CONFIG_PACKAGE_luci-" "$config_file" 2>/dev/null | \
+    sed 's/^CONFIG_PACKAGE_\(.*\)=\(.*\)/\1=\2/' | sort
+}
+
+# 主对比函数
+compare_packages() {
+    local config1=$1
+    local config2=$2
+    local report_name=${3:-"软件包对比"}
+    local report_file="${report_name}.md"
     
-    # 检查环境
-    check_opnwrt_dir
+    log_info "开始对比LUCI软件包..."
+    log_info "配置文件1: $config1"
+    log_info "配置文件2: $config2"
     
-    # 执行命令
-    case $command in
-        merge)
-            merge_configs "$param1" "$param2" "$param3"
-            ;;
-        check)
-            check_packages "$param1" "$param2" "$param3"
-            ;;
-        compare)
-            compare_configs "$param1" "$param2" "$param3"
-            ;;
-        validate)
-            validate_config "$param1"
-            ;;
-    esac
+    # 提取软件包
+    local packages1=$(extract_luci_packages "$config1")
+    local packages2=$(extract_luci_packages "$config2")
+    
+    local total1=$(echo "$packages1" | wc -l)
+    local total2=$(echo "$packages2" | wc -l)
+    
+    log_info "配置1软件包数: $total1"
+    log_info "配置2软件包数: $total2"
+    
+    # 调试输出
+    log_info "配置1软件包列表:"
+    echo "$packages1" | sed 's/^/  /'
+    log_info "配置2软件包列表:"
+    echo "$packages2" | sed 's/^/  /'
+    
+    # 创建临时文件
+    local temp1=$(mktemp)
+    local temp2=$(mktemp)
+    trap "rm -f $temp1 $temp2" EXIT
+    
+    echo "$packages1" > "$temp1"
+    echo "$packages2" > "$temp2"
+    
+    # 生成报告
+    cat > "$report_file" << EOF
+# $report_name
+
+**对比时间**: $(date)  
+**配置文件1**: $config1  
+**配置文件2**: $config2  
+
+## 📊 软件包统计
+
+| 项目 | 软件包数量 |
+|------|-----------|
+| 配置1 | $total1 |
+| 配置2 | $total2 |
+| 差异 | $((total2 - total1)) |
+
+## 📋 软件包详细对比
+
+EOF
+    
+    # 找出新增的软件包
+    local added=$(comm -13 "$temp1" "$temp2")
+    if [ -n "$added" ]; then
+        log_info "新增的软件包:"
+        echo "$added" | while IFS= read -r line; do
+            local pkg=$(echo "$line" | cut -d'=' -f1)
+            local status=$(echo "$line" | cut -d'=' -f2)
+            echo "  + $pkg ($status)"
+        done
+        
+        cat >> "$report_file" << EOF
+### ✅ 新增的软件包
+
+| 软件包 | 状态 | 说明 |
+|--------|------|------|
+EOF
+        echo "$added" | while IFS= read -r line; do
+            local pkg=$(echo "$line" | cut -d'=' -f1)
+            local status=$(echo "$line" | cut -d'=' -f2)
+            echo "| $pkg | $status | 新增安装 |" >> "$report_file"
+        done
+        echo "" >> "$report_file"
+    fi
+    
+    # 找出删除的软件包
+    local removed=$(comm -23 "$temp1" "$temp2")
+    if [ -n "$removed" ]; then
+        log_info "删除的软件包:"
+        echo "$removed" | while IFS= read -r line; do
+            local pkg=$(echo "$line" | cut -d'=' -f1)
+            local status=$(echo "$line" | cut -d'=' -f2)
+            echo "  - $pkg ($status)"
+        done
+        
+        cat >> "$report_file" << EOF
+### ❌ 删除的软件包
+
+| 软件包 | 状态 | 说明 |
+|--------|------|------|
+EOF
+        echo "$removed" | while IFS= read -r line; do
+            local pkg=$(echo "$line" | cut -d'=' -f1)
+            local status=$(echo "$line" | cut -d'=' -f2)
+            echo "| $pkg | $status | 已移除 |" >> "$report_file"
+        done
+        echo "" >> "$report_file"
+    fi
+    
+    # 找出状态改变的软件包
+    local changed_count=0
+    cat >> "$report_file" << EOF
+### 🔄 状态改变的软件包
+
+| 软件包 | 状态 | 说明 |
+|--------|------|------|
+EOF
+    
+    # 创建状态映射
+    declare -A status1 status2
+    while IFS='=' read -r pkg status; do
+        status1["$pkg"]="$status"
+    done < "$temp1"
+    
+    while IFS='=' read -r pkg status; do
+        status2["$pkg"]="$status"
+    done < "$temp2"
+    
+    # 检查状态改变
+    for pkg in "${!status1[@]}"; do
+        # 修复：检查软件包是否在第二个配置中存在
+        if [[ -n "${status2[$pkg]}" && "${status1[$pkg]}" != "${status2[$pkg]}" ]]; then
+            echo "  🔄 $pkg (${status1[$pkg]} → ${status2[$pkg]})"
+            echo "| $pkg | ${status1[$pkg]} → ${status2[$pkg]} | 状态改变 |" >> "$report_file"
+            ((changed_count++))
+        fi
+    done
+    
+    if [ $changed_count -eq 0 ]; then
+        echo "| 无 | 无 | 无状态改变 |" >> "$report_file"
+    fi
+    echo "" >> "$report_file"
+    
+    # 添加完整软件包列表
+    cat >> "$report_file" << EOF
+
+## 📦 完整软件包列表
+
+### 配置1中的软件包
+| 软件包 | 状态 |
+|--------|------|
+EOF
+    echo "$packages1" | while IFS='=' read -r pkg status; do
+        echo "| $pkg | $status |" >> "$report_file"
+    done
+    
+    cat >> "$report_file" << EOF
+
+### 配置2中的软件包
+| 软件包 | 状态 |
+|--------|------|
+EOF
+    echo "$packages2" | while IFS='=' read -r pkg status; do
+        echo "| $pkg | $status |" >> "$report_file"
+    done
+    
+    # 输出摘要
+    local added_count=$(echo "$added" | grep -c '.' || echo 0)
+    local removed_count=$(echo "$removed" | grep -c '.' || echo 0)
+    
+    log_info "对比摘要:"
+    echo "  - 新增软件包: $added_count"
+    echo "  - 删除软件包: $removed_count"
+    echo "  - 状态改变: $changed_count"
+    echo "  - 报告文件: $report_file"
+    
+    log_success "软件包对比完成！"
+}
+
+# 主函数
+main() {
+    # 检查参数
+    check_params "$@"
+    
+    # 执行对比
+    compare_packages "$1" "$2" "$3"
 }
 
 # 如果直接运行脚本
