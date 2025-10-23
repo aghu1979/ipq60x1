@@ -21,28 +21,6 @@ on:
         description: '核心系统映射文件名称（可选，用于批量编译）'
         required: false
         type: string
-  workflow_dispatch:
-    inputs:
-      build_all:
-        description: '是否为所有核心系统编译'
-        required: true
-        default: true
-        type: boolean
-      core-artifact:
-        description: '核心系统Artifact名称（当build_all为false时必需）'
-        required: false
-      package:
-        description: '软件包配置'
-        required: true
-        default: 'Pro'
-        type: choice
-        options:
-          - Pro
-          - Max
-          - Ultra
-      core-map:
-        description: '核心系统映射文件名称（可选，用于批量编译）'
-        required: false
 
 jobs:
   # 下载核心系统映射并生成任务矩阵
