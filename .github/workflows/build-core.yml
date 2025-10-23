@@ -3,31 +3,80 @@ name: Build Core System
 on:
   workflow_dispatch:
     inputs:
-      chip:
-        description: '芯片型号'
+      build_all:
+        description: '是否编译所有组合'
         required: true
+        default: true
+        type: boolean
+      chip:
+        description: '芯片型号（当build_all为false时生效）'
+        required: false
         default: 'ipq60xx'
         type: choice
         options:
           - ipq60xx
-          - ipq80xx
+          # - ipq80xx  # 暂时注释，保留扩展空间
       branch:
-        description: '源码分支'
-        required: true
+        description: '源码分支（当build_all为false时生效）'
+        required: false
         default: 'openwrt'
         type: choice
         options:
           - openwrt
           - immwrt
           - libwrt
+  schedule:
+    - cron: '0 2 * * 1'  # 每周一凌晨2点自动编译
 
 jobs:
-  build-core:
-    runs-on: ubuntu-22.04
+  generate-matrix:
+    runs-on: ubuntu-latest
     outputs:
-      core-cache-key: ${{ steps.cache.outputs.cache-hit }}
-      build-path: ${{ steps.setup.outputs.build-path }}
-      cache-key: ${{ steps.setup.outputs.cache-key }}
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+
+      - name: 📦 生成编译矩阵
+        id: set-matrix
+        run: |
+          if [ "${{ inputs.build_all }}" = "true" ]; then
+            # 编译所有组合（暂时只包含ipq60xx）
+            matrix=$(jq -n -c \
+              --argjson chips '["ipq60xx"]' \
+              # --argjson chips '["ipq60xx", "ipq80xx"]'  # 未来扩展时取消注释
+              --argjson branches '["openwrt", "immwrt", "libwrt"]' \
+              '{
+                include: [
+                  $chips[] as $chip | $branches[] as $branch | {chip, branch}
+                ]
+              }')
+            echo "📋 将编译所有芯片和分支组合"
+          else
+            # 只编译指定组合
+            matrix=$(jq -n -c \
+              --arg chip "${{ inputs.chip }}" \
+              --arg branch "${{ inputs.branch }}" \
+              '{
+                include: [
+                  {chip: $chip, branch: $branch}
+                ]
+              }')
+            echo "📋 将编译指定组合: ${{ inputs.chip }}-${{ inputs.branch }}"
+          fi
+          
+          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+          echo "Generated matrix: $matrix"
+
+  build-core:
+    needs: generate-matrix
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    outputs:
+      ${{ matrix.chip }}-${{ matrix.branch }}-cache-key: ${{ steps.setup.outputs.cache-key }}
+      ${{ matrix.chip }}-${{ matrix.branch }}-build-path: ${{ steps.setup.outputs.build-path }}
     steps:
       - name: 📥 检出代码
         uses: actions/checkout@v4
@@ -40,8 +89,8 @@ jobs:
           sudo apt-get install -y jq curl build-essential
           
           # 设置变量
-          CHIP="${{ inputs.chip }}"
-          BRANCH="${{ inputs.branch }}"
+          CHIP="${{ matrix.chip }}"
+          BRANCH="${{ matrix.branch }}"
           BUILD_PATH="core-build-${CHIP}-${BRANCH}"
           
           # 生成缓存键
@@ -68,7 +117,7 @@ jobs:
           path: ${{ steps.setup.outputs.build-path }}
           key: ${{ steps.setup.outputs.cache-key }}
           restore-keys: |
-            core-${{ inputs.chip }}-${{ inputs.branch }}-
+            core-${{ matrix.chip }}-${{ matrix.branch }}-
 
       - name: 🌱 编译核心系统
         if: steps.cache.outputs.cache-hit != 'true'
@@ -84,6 +133,51 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: core-${{ inputs.chip }}-${{ inputs.branch }}-${{ github.run_id }}
+          name: core-${{ matrix.chip }}-${{ matrix.branch }}-${{ github.run_id }}
           path: ${{ steps.setup.outputs.build-path }}
           retention-days: 7
+
+  # 生成所有核心系统的映射文件
+  generate-core-map:
+    needs: [generate-matrix, build-core]
+    runs-on: ubuntu-latest
+    if: always() && needs.build-core.result == 'success'
+    steps:
+      - name: 📝 生成核心系统映射文件
+        run: |
+          # 创建映射文件（暂时只包含ipq60xx）
+          cat > core-map.json << EOF
+          {
+            "ipq60xx-openwrt": "core-ipq60xx-openwrt-${{ github.run_id }}",
+            "ipq60xx-immwrt": "core-ipq60xx-immwrt-${{ github.run_id }}",
+            "ipq60xx-libwrt": "core-ipq60xx-libwrt-${{ github.run_id }}",
+            # "ipq80xx-openwrt": "core-ipq80xx-openwrt-${{ github.run_id }}",  # 未来扩展时取消注释
+            # "ipq80xx-immwrt": "core-ipq80xx-immwrt-${{ github.run_id }}",   # 未来扩展时取消注释
+            # "ipq80xx-libwrt": "core-ipq80xx-libwrt-${{ github.run_id }}"    # 未来扩展时取消注释
+          }
+          EOF
+          
+          echo "📋 核心系统映射文件:"
+          cat core-map.json
+
+      - name: 📤 上传映射文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-map-${{ github.run_id }}
+          path: core-map.json
+          retention-days: 1
+
+  # 自动触发所有软件包编译
+  trigger-packages:
+    needs: [generate-matrix, build-core, generate-core-map]
+    runs-on: ubuntu-latest
+    if: always() && needs.build-core.result == 'success' && needs.generate-core-map.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [Pro, Max, Ultra]
+    steps:
+      - name: 🚀 触发软件包编译
+        run: |
+          echo "📋 将为所有核心系统编译 ${{ matrix.package }} 软件包"
+          # 这里只是展示信息，实际的软件包编译需要手动触发或通过其他方式
