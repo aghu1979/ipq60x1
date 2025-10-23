@@ -41,13 +41,17 @@ jobs:
         run: |
           echo "time=$(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
 
-  # Job 1: 编译基础系统
+  # Job 1: 编译基础系统 - 为每个分支单独编译
   build-base:
     needs: generate-matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [openwrt, immwrt, libwrt]
     uses: ./.github/workflows/base-build.yml
     with:
-      chip: ipq60xx  # 直接指定芯片
-      branch: openwrt  # 默认分支，后续会并行编译所有分支
+      chip: ipq60xx
+      branch: ${{ matrix.branch }}
     secrets: inherit
 
   # Job 2: 并行编译最终固件
@@ -61,7 +65,7 @@ jobs:
       chip: ${{ matrix.chip }}
       branch: ${{ matrix.branch }}
       config: ${{ matrix.config }}
-      base-cache-key: ${{ needs.build-base.outputs.cache-key }}
+      base-cache-key: ${{ needs.build-base.outputs[matrix.branch].cache-key }}
     secrets: inherit
 
   release:
