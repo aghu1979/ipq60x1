@@ -113,7 +113,7 @@ jobs:
           restore-keys: |
             base-${{ inputs.chip }}-${{ inputs.branch }}-
 
-      - name: 🌱� 准备基础环境
+      - name: 🌱 准备基础环境
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           echo "🔧 准备基础编译环境..."
@@ -316,14 +316,16 @@ jobs:
             tar -xzf "$BUILD_PATH/base.tar.gz" -C temp-extract
             
             # 查找并复制报告文件
-            if [ -f "temp-extract/基础系统-最终检查.md" ]; then
-              cp temp-extract/基础系统-最终检查.md luci-packages-基础系统-${{ inputs.branch }}.md
-              echo "✅ 已提取最终检查报告"
-            fi
+            echo "📋 查找报告文件..."
+            find temp-extract -name "*.md" -type f -exec echo "找到报告: {}" \;
             
-            for report in 基础系统-初步检查.md 基础系统.md; do
+            # 复制所有.md文件到当前目录
+            find temp-extract -name "*.md" -type f -exec cp {} . \;
+            
+            # 复制到上级目录
+            for report in 基础系统-最终检查.md 基础系统-初步检查.md 基础系统.md; do
               if [ -f "temp-extract/$report" ]; then
-                cp "temp-extract/$report" .
+                cp "temp-extract/$report" ../luci-packages-基础系统-${{ inputs.branch }}.md"
                 echo "✅ 已提取报告: $report"
               fi
             done
