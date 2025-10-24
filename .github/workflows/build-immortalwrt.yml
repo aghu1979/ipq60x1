@@ -79,7 +79,8 @@ jobs:
       id: vars
       run: |
         # 使用Ultra配置生成基础变量
-        cp $BASE_CONFIG $IMMWRT_CONFIG configs/Ultra.config /tmp/merged.config
+        # 修复：使用cat命令合并配置文件，而不是cp命令
+        cat $BASE_CONFIG $IMMWRT_CONFIG configs/Ultra.config > /tmp/merged.config
         cd $OPENWRT_PATH
         cp /tmp/merged.config .config
         make defconfig > /dev/null 2>&1
