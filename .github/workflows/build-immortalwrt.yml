@@ -30,11 +30,10 @@ jobs:
       file-date: ${{ steps.build-date.outputs.file-date }}
       version-info: ${{ steps.version-info.outputs.info }}
       version-kernel: ${{ steps.version-info.outputs.kernel }}
-      source-repo: ${{ steps.vars.outputs.source-repo }}
-      device-target: ${{ steps.vars.outputs.device-target }}
-      device-subtarget: ${{ steps.vars.outputs.device-subtarget }}
-      hash: ${{ steps.vars.outputs.hash }}
-      openwrt-path: ${{ steps.vars.outputs.openwrt-path }} # 新增：输出基础源码路径
+      source-repo: ${{ steps.clone-source.outputs.source-repo }}
+      device-target: ${{ steps.generate-vars.outputs.device-target }}
+      device-subtarget: ${{ steps.generate-vars.outputs.device-subtarget }}
+      hash: ${{ steps.clone-source.outputs.hash }}
 
     steps:
     - name: 检查服务器性能
@@ -63,38 +62,40 @@ jobs:
     - name: 检出代码
       uses: actions/checkout@main
 
-    - name: 克隆源代码
-      id: vars # 修复：将id移到这里，以便后续步骤可以引用输出
+    - name: 克隆源代码并生成基础变量
+      id: clone-source
       run: |
         df -hT $GITHUB_WORKSPACE
         sudo mkdir -p /mnt/openwrt
         sudo chown -R $(id -u):$(id -g) /mnt/openwrt
         git clone --depth 1 -b $REPO_BRANCH --single-branch $REPO_URL /mnt/openwrt
         cd /mnt/openwrt
-        OPENWRT_PATH="$PWD"
-        echo "OPENWRT_PATH=$OPENWRT_PATH" >> $GITHUB_ENV
-        echo "openwrt-path=$OPENWRT_PATH" >> $GITHUB_OUTPUT # 修复：输出到GITHUB_OUTPUT
+        
+        # 输出版本信息
         VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
         echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
         VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12 2>/dev/null || echo "N/A")
         echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
-
-    - name: 生成变量
-      # 修复：移除id，因为上面的步骤已经有了
-      run: |
-        # 使用Ultra配置生成基础变量
-        # 修复：使用cat命令合并配置文件，而不是cp命令
-        cat $BASE_CONFIG $IMMWRT_CONFIG configs/Ultra.config > /tmp/merged.config
-        cd $OPENWRT_PATH
-        cp /tmp/merged.config .config
-        make defconfig > /dev/null 2>&1
+        
+        # 输出基础变量
         SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
         echo "source-repo=$SOURCE_REPO" >> $GITHUB_OUTPUT
+        echo "hash=$(git log -1 --pretty=format:'%h')" >> $GITHUB_OUTPUT
+
+    - name: 生成设备变量
+      id: generate-vars
+      run: |
+        # 使用Ultra配置生成基础变量
+        cat $BASE_CONFIG $IMMWRT_CONFIG configs/Ultra.config > /tmp/merged.config
+        cd /mnt/openwrt
+        cp /tmp/merged.config .config
+        make defconfig > /dev/null 2>&1
+        
+        # 输出设备变量
         DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
         echo "device-target=$DEVICE_TARGET" >> $GITHUB_OUTPUT
         DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
         echo "device-subtarget=$DEVICE_SUBTARGET" >> $GITHUB_OUTPUT
-        echo "hash=$(git log -1 --pretty=format:'%h')" >> $GITHUB_OUTPUT
 
     - name: 设置构建日期
       id: build-date
@@ -111,23 +112,22 @@ jobs:
     - name: 生成缓存键
       id: cache-key
       run: |
-        echo "key=${{ steps.vars.outputs.source-repo }}-${{ env.REPO_BRANCH }}-${{ steps.vars.outputs.device-target }}-${{ steps.vars.outputs.device-subtarget }}-${{ steps.vars.outputs.hash }}-${{ steps.build-date.outputs.date }}" >> $GITHUB_OUTPUT
+        echo "key=${{ steps.clone-source.outputs.source-repo }}-${{ env.REPO_BRANCH }}-${{ steps.generate-vars.outputs.device-target }}-${{ steps.generate-vars.outputs.device-subtarget }}-${{ steps.clone-source.outputs.hash }}-${{ steps.build-date.outputs.date }}" >> $GITHUB_OUTPUT
 
     - name: 缓存工具链
       uses: actions/cache@main
       with:
         key: ${{ steps.cache-key.outputs.key }}
-        restore-keys: ${{ steps.vars.outputs.source-repo }}-${{ env.REPO_BRANCH }}-${{ steps.vars.outputs.device-target }}-${{ steps.vars.outputs.device-subtarget }}-
+        restore-keys: ${{ steps.clone-source.outputs.source-repo }}-${{ env.REPO_BRANCH }}-${{ steps.generate-vars.outputs.device-target }}-${{ steps.generate-vars.outputs.device-subtarget }}-
         path: |
-          ${{ steps.vars.outputs.openwrt-path }}/.ccache
-          ${{ steps.vars.outputs.openwrt-path }}/staging_dir
-          ${{ steps.vars.outputs.openwrt-path }}/dl
+          /mnt/openwrt/.ccache
+          /mnt/openwrt/staging_dir
+          /mnt/openwrt/dl
 
     - name: 刷新缓存
       run: |
-        # 修复：使用正确的路径
-        if [ -d "${{ steps.vars.outputs.openwrt-path }}/staging_dir" ]; then
-          find "${{ steps.vars.outputs.openwrt-path }}/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
+        if [ -d "/mnt/openwrt/staging_dir" ]; then
+          find "/mnt/openwrt/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
               find "$dir" -type f -exec touch {} +
           done
         fi
@@ -146,24 +146,10 @@ jobs:
 
     - name: 初始化日志
       run: |
-        # 修复：切换到工作目录
         cd $GITHUB_WORKSPACE
         source scripts/logger.sh
         init_log
         log_system_status
-
-    - name: 检查缓存
-      run: |
-        # 修复：切换到工作目录并使用正确的路径
-        cd $GITHUB_WORKSPACE
-        source scripts/utils.sh
-        if is_cache_valid "${{ needs.Setup.outputs.openwrt-path }}/dl" 3; then
-          echo "CACHE_VALID=true" >> $GITHUB_ENV
-          log_info "DL缓存有效，将使用缓存"
-        else
-          echo "CACHE_VALID=false" >> $GITHUB_ENV
-          log_info "DL缓存无效，将重新下载"
-        fi
 
     - name: 准备构建环境
       run: |
@@ -172,23 +158,46 @@ jobs:
         sudo mkdir -p $BUILD_DIR
         sudo chown -R $(id -u):$(id -g) $BUILD_DIR
         
-        # 复制源代码
-        if [ "$CACHE_VALID" == "true" ]; then
-          # 使用硬链接复制以节省空间
-          cp -al ${{ needs.Setup.outputs.openwrt-path }}/. $BUILD_DIR
-          log_info "使用硬链接复制源代码"
-        else
-          # 完全复制
-          cp -r ${{ needs.Setup.outputs.openwrt-path }}/. $BUILD_DIR
-          log_info "完全复制源代码"
-        fi
+        # 关键修复：在Build作业中重新克隆源代码
+        log_info "为 ${{ matrix.variant }} 变体克隆源代码到 $BUILD_DIR"
+        git clone --depth 1 -b $REPO_BRANCH --single-branch $REPO_URL $BUILD_DIR
         
         echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
         echo "OPENWRT_PATH=$BUILD_DIR" >> $GITHUB_ENV
 
+    - name: 检查并恢复缓存
+      run: |
+        cd $GITHUB_WORKSPACE
+        source scripts/utils.sh
+        
+        # 检查缓存是否有效
+        if is_cache_valid "/mnt/openwrt/dl" 3; then
+          echo "CACHE_VALID=true" >> $GITHUB_ENV
+          log_info "DL缓存有效，将恢复缓存"
+          
+          # 恢复缓存内容
+          log_info "恢复 .ccache 缓存"
+          sudo mkdir -p $OPENWRT_PATH/.ccache
+          sudo cp -al /mnt/openwrt/.ccache/. $OPENWRT_PATH/.ccache/ || true
+          
+          log_info "恢复 staging_dir 缓存"
+          sudo mkdir -p $OPENWRT_PATH/staging_dir
+          sudo cp -al /mnt/openwrt/staging_dir/. $OPENWRT_PATH/staging_dir/ || true
+          
+          log_info "恢复 dl 缓存"
+          sudo mkdir -p $OPENWRT_PATH/dl
+          sudo cp -al /mnt/openwrt/dl/. $OPENWRT_PATH/dl/ || true
+          
+          # 修正所有权
+          sudo chown -R $(id -u):$(id -g) $OPENWRT_PATH
+          
+        else
+          echo "CACHE_VALID=false" >> $GITHUB_ENV
+          log_info "缓存无效，将进行完整构建"
+        fi
+
     - name: 合并配置文件
       run: |
-        # 修复：切换到工作目录
         cd $GITHUB_WORKSPACE
         source scripts/logger.sh
         source scripts/utils.sh
@@ -204,7 +213,6 @@ jobs:
 
     - name: 比较软件包列表
       run: |
-        # 修复：切换到工作目录
         cd $GITHUB_WORKSPACE
         source scripts/logger.sh
         
@@ -221,7 +229,6 @@ jobs:
 
     - name: 安装Feeds
       run: |
-        # 修复：切换到工作目录
         cd $GITHUB_WORKSPACE
         source scripts/logger.sh
         
@@ -237,7 +244,6 @@ jobs:
 
     - name: 加载自定义配置
       run: |
-        # 修复：切换到工作目录
         cd $GITHUB_WORKSPACE
         source scripts/logger.sh
         
@@ -250,7 +256,6 @@ jobs:
 
     - name: 下载DL软件包
       run: |
-        # 修复：切换到工作目录
         cd $GITHUB_WORKSPACE
         source scripts/logger.sh
         
@@ -267,7 +272,6 @@ jobs:
     - name: 编译固件
       id: compile
       run: |
-        # 修复：切换到工作目录
         cd $GITHUB_WORKSPACE
         source scripts/logger.sh
         
@@ -301,7 +305,6 @@ jobs:
     - name: 整理文件
       if: steps.compile.outputs.status == 'success'
       run: |
-        # 修复：切换到工作目录
         cd $GITHUB_WORKSPACE
         source scripts/logger.sh
         
@@ -382,8 +385,8 @@ jobs:
         done
         # 输出缓存状态
         echo "========cache status========"
-        echo "ccache: $(du -sh ${{ needs.Setup.outputs.openwrt-path }}/.ccache 2>/dev/null | cut -f 1 || echo "N/A")"
-        echo "staging: $(du -sh ${{ needs.Setup.outputs.openwrt-path }}/staging_dir 2>/dev/null | cut -f 1 || echo "N/A")"
-        echo "dl: $(du -sh ${{ needs.Setup.outputs.openwrt-path }}/dl 2>/dev/null | cut -f 1 || echo "N/A")"
+        echo "ccache: $(du -sh /mnt/openwrt/.ccache 2>/dev/null | cut -f 1 || echo "N/A")"
+        echo "staging: $(du -sh /mnt/openwrt/staging_dir 2>/dev/null | cut -f 1 || echo "N/A")"
+        echo "dl: $(du -sh /mnt/openwrt/dl 2>/dev/null | cut -f 1 || echo "N/A")"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
