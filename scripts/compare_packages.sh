@@ -11,19 +11,16 @@ check_package_exists() {
     local package=$1
     local openwrt_dir=$2
     
-    # 检查软件包是否在feeds中定义
-    if [ -f "$openwrt_dir/feeds.conf.default" ]; then
-        # 搜索软件包定义
-        if grep -q "Package: $package" "$openwrt_dir/package/feeds/"*/*/Makefile 2>/dev/null; then
-            return 0  # 软件包存在
-        fi
-    fi
-    
     # 检查软件包是否在临时索引中
     if [ -f "$openwrt_dir/tmp/.packageinfo" ]; then
         if grep -q "^$package$" "$openwrt_dir/tmp/.packageinfo" 2>/dev/null; then
             return 0  # 软件包存在
         fi
+    fi
+    
+    # 检查软件包是否在feeds中定义
+    if find "$openwrt_dir/package/feeds" -name "Makefile" -exec grep -l "Package: $package" {} \; 2>/dev/null | grep -q .; then
+        return 0  # 软件包存在
     fi
     
     return 1  # 软件包不存在
@@ -34,11 +31,92 @@ get_package_dependencies() {
     local package=$1
     local openwrt_dir=$2
     
-    # 从Makefile中提取依赖
+    # 从临时索引中获取依赖
+    if [ -f "$openwrt_dir/tmp/.packageinfo" ]; then
+        # 查找软件包的依赖信息
+        awk -v pkg="$package" '
+            $0 == pkg { 
+                in_pkg = 1 
+                next 
+            } 
+            in_pkg && /^Depends:/ { 
+                gsub(/^Depends: /, ""); 
+                gsub(/,/, "\n"); 
+                for (i = 1; i <= NF; i++) print $i 
+            } 
+            in_pkg && /^$/ { 
+                in_pkg = 0 
+            } 
+        ' "$openwrt_dir/tmp/.packageinfo" 2>/dev/null
+    fi
+    
+    # 如果临时索引中没有，尝试从Makefile中提取
     local makefile=$(find "$openwrt_dir/package" -name "Makefile" -exec grep -l "Package: $package" {} \; 2>/dev/null | head -1)
     if [ -n "$makefile" ]; then
-        grep "^DEPENDS:=" "$makefile" 2>/dev/null | sed 's/^DEPENDS:=//g' | sed 's/+//g'
+        grep "^DEPENDS:=" "$makefile" 2>/dev/null | sed 's/^DEPENDS:=//g' | sed 's/+//g' | tr ' ' '\n'
     fi
+}
+
+# 在控制台显示诊断摘要
+print_diagnostic_summary() {
+    local before_file=$1
+    local after_file=$2
+    local openwrt_dir=$3
+    local variant=$4
+    
+    local before_count=$(wc -l < "$before_file")
+    local after_count=$(wc -l < "$after_file")
+    local removed_packages=$(comm -23 "$before_file" "$after_file")
+    local removed_count=$(echo "$removed_packages" | grep -c .)
+    
+    echo ""
+    echo "================================================================================"
+    echo "🔍 $variant 变体软件包配置诊断摘要"
+    echo "================================================================================"
+    echo "📊 统计信息:"
+    echo "   - defconfig前软件包数量: $before_count"
+    echo "   - defconfig后软件包数量: $after_count"
+    echo "   - 被删除的软件包数量: $removed_count"
+    echo ""
+    
+    if [ $removed_count -gt 0 ]; then
+        echo "❌ 发现问题: $removed_count 个软件包被删除"
+        echo ""
+        echo "📋 被删除的软件包详情:"
+        echo "----------------------------------------"
+        
+        while IFS= read -r package; do
+            if [ -n "$package" ]; then
+                local status="未知"
+                local reason="未知"
+                
+                # 检查软件包是否存在
+                if check_package_exists "$package" "$openwrt_dir"; then
+                    status="存在"
+                    reason="可能是依赖问题或配置冲突"
+                else
+                    status="不存在"
+                    reason="软件包不存在于当前源码或feeds中"
+                fi
+                
+                printf "   %-30s | %-8s | %s\n" "$package" "$status" "$reason"
+            fi
+        done <<< "$removed_packages"
+        
+        echo "----------------------------------------"
+        echo ""
+        echo "🔧 可能的解决方案:"
+        echo "   1. 检查 configs/${variant}.config 文件中的软件包名称是否正确"
+        echo "   2. 确认软件包适用于IPQ60xx架构"
+        echo "   3. 检查软件包的依赖关系是否满足"
+        echo "   4. 查看完整的HTML诊断报告获取更多详情"
+        echo ""
+    else
+        echo "✅ 所有软件包配置正常"
+    fi
+    
+    echo "================================================================================"
+    echo ""
 }
 
 # 尝试自动修复依赖
@@ -114,6 +192,7 @@ generate_diagnostic_report() {
         .package-name { font-family: monospace; background-color: #f8f9fa; padding: 2px 5px; border-radius: 3px; }
         .reason { font-size: 0.9em; color: #7f8c8d; }
         .fix-suggestion { background-color: #fff3cd; padding: 10px; border-radius: 5px; margin-top: 10px; }
+        .console-output { background-color: #2d3748; color: #e2e8f0; padding: 15px; border-radius: 5px; font-family: monospace; white-space: pre-wrap; }
     </style>
 </head>
 <body>
@@ -135,6 +214,18 @@ generate_diagnostic_report() {
         <div class="summary-item">
             <h3>已删除</h3>
             <p class="warning">$removed_count 个软件包</p>
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>控制台输出摘要</h2>
+        <div class="console-output">
+EOF
+
+    # 添加控制台输出到报告
+    print_diagnostic_summary "$before_file" "$after_file" "$openwrt_dir" "$variant" >> "$report_file"
+
+    cat >> "$report_file" << EOF
         </div>
     </div>
     
@@ -263,9 +354,12 @@ main() {
     
     # 获取defconfig后的luci软件包列表
     local after_file="$output_dir/${variant}_luci_after.txt"
-    get_luci_packages "$openwrt_dir/.config" > "$after_file"
+    get_luci_packages "$openwrt_path/.config" > "$after_file"
     
     log_info "defconfig后的luci软件包数量: $(wc -l < "$after_file")"
+    
+    # 在控制台显示诊断摘要
+    print_diagnostic_summary "$before_file" "$after_file" "$openwrt_dir" "$variant"
     
     # 检查是否有软件包被删除
     local removed_packages=$(comm -23 "$before_file" "$after_file")
@@ -274,20 +368,24 @@ main() {
     if [ $removed_count -gt 0 ]; then
         log_warn "发现 $removed_count 个软件包被删除，尝试自动修复..."
         
-        # 收集缺失的依赖
-        local missing_deps=""
+        # 收集所有可能的依赖
+        local all_deps=""
         while IFS= read -r package; do
             if [ -n "$package" ]; then
                 local deps=$(get_package_dependencies "$package" "$openwrt_dir")
                 if [ -n "$deps" ]; then
-                    missing_deps="$missing_deps$deps"$'\n'
+                    all_deps="$all_deps$deps"$'\n'
+                    log_info "软件包 $package 的依赖: $deps"
+                else
+                    log_warn "无法获取软件包 $package 的依赖信息"
                 fi
             fi
         done <<< "$removed_packages"
         
         # 尝试修复依赖
-        if [ -n "$missing_deps" ]; then
-            fix_dependencies "$missing_deps" "$openwrt_dir" "$config_file"
+        if [ -n "$all_deps" ]; then
+            log_info "发现的依赖包: $all_deps"
+            fix_dependencies "$all_deps" "$openwrt_dir" "$config_file"
             
             # 重新获取修复后的软件包列表
             local fixed_after_file="$output_dir/${variant}_luci_after_fixed.txt"
@@ -319,6 +417,10 @@ main() {
             
             # 生成诊断报告
             generate_diagnostic_report "$before_file" "$after_file" "$openwrt_dir" "$variant" "$output_dir"
+            
+            # 输出缺失的软件包列表
+            echo "缺失的软件包列表:" > "$output_dir/${variant}_missing_packages.txt"
+            echo "$removed_packages" >> "$output_dir/${variant}_missing_packages.txt"
             
             exit 1
         fi
