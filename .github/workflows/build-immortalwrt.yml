@@ -153,6 +153,10 @@ jobs:
 
     - name: 准备构建环境
       run: |
+        # 修复：切换到工作目录并加载日志函数
+        cd $GITHUB_WORKSPACE
+        source scripts/logger.sh
+        
         # 创建构建目录
         BUILD_DIR="/mnt/openwrt-${{ matrix.variant }}"
         sudo mkdir -p $BUILD_DIR
@@ -167,7 +171,9 @@ jobs:
 
     - name: 检查并恢复缓存
       run: |
+        # 修复：切换到工作目录并加载所有需要的函数库
         cd $GITHUB_WORKSPACE
+        source scripts/logger.sh
         source scripts/utils.sh
         
         # 检查缓存是否有效
@@ -198,6 +204,7 @@ jobs:
 
     - name: 合并配置文件
       run: |
+        # 修复：切换到工作目录并加载所有需要的函数库
         cd $GITHUB_WORKSPACE
         source scripts/logger.sh
         source scripts/utils.sh
@@ -213,6 +220,7 @@ jobs:
 
     - name: 比较软件包列表
       run: |
+        # 修复：切换到工作目录并加载日志函数
         cd $GITHUB_WORKSPACE
         source scripts/logger.sh
         
@@ -229,6 +237,7 @@ jobs:
 
     - name: 安装Feeds
       run: |
+        # 修复：切换到工作目录并加载日志函数
         cd $GITHUB_WORKSPACE
         source scripts/logger.sh
         
@@ -244,6 +253,7 @@ jobs:
 
     - name: 加载自定义配置
       run: |
+        # 修复：切换到工作目录并加载日志函数
         cd $GITHUB_WORKSPACE
         source scripts/logger.sh
         
@@ -256,6 +266,7 @@ jobs:
 
     - name: 下载DL软件包
       run: |
+        # 修复：切换到工作目录并加载日志函数
         cd $GITHUB_WORKSPACE
         source scripts/logger.sh
         
@@ -272,6 +283,7 @@ jobs:
     - name: 编译固件
       id: compile
       run: |
+        # 修复：切换到工作目录并加载日志函数
         cd $GITHUB_WORKSPACE
         source scripts/logger.sh
         
@@ -305,6 +317,7 @@ jobs:
     - name: 整理文件
       if: steps.compile.outputs.status == 'success'
       run: |
+        # 修复：切换到工作目录并加载日志函数
         cd $GITHUB_WORKSPACE
         source scripts/logger.sh
         
