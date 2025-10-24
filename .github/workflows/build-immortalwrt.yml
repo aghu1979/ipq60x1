@@ -21,6 +21,10 @@ env:
   BASE_CONFIG: configs/base_ipq60xx.config
   IMMWRT_CONFIG: configs/base_immwrt.config
 
+# 添加权限配置
+permissions:
+  contents: write
+
 jobs:
   Setup:
     runs-on: ubuntu-22.04
@@ -208,6 +212,11 @@ jobs:
         cd $GITHUB_WORKSPACE
         source scripts/logger.sh
         source scripts/utils.sh
+        
+        # 调试：显示各个配置文件的luci包数
+        debug_luci_configs "$BASE_CONFIG" "base_ipq60xx.config"
+        debug_luci_configs "$IMMWRT_CONFIG" "base_immwrt.config"
+        debug_luci_configs "configs/${{ matrix.variant }}.config" "${{ matrix.variant }}.config"
         
         # 合并配置文件
         MERGED_CONFIG="/tmp/${{ matrix.variant }}.config"
@@ -410,13 +419,11 @@ jobs:
 
     - name: 上传固件到Release
       if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
-      uses: ncipollo/release-action@main
+      uses: softprops/action-gh-release@v1
       with:
         name: ${{ needs.Setup.outputs.build-date }} for ${{ matrix.variant }}
-        allowUpdates: true
-        tag: ${{ matrix.variant }}-${{ needs.Setup.outputs.file-date }}
-        token: ${{ secrets.GITHUB_TOKEN }}
-        artifacts: ${{ env.FIRMWARE_PATH }}/*
+        tag_name: ${{ matrix.variant }}-${{ needs.Setup.outputs.file-date }}
+        files: ${{ env.FIRMWARE_PATH }}/*
         body: |
           **This is ImmortalWrt Firmware for ${{ matrix.variant }} variant**
           ### 📒 固件信息
@@ -434,6 +441,8 @@ jobs:
           - 固件内核版本：**${{ needs.Setup.outputs.version-kernel }}**
           - 固件编译前最后一次➦[主源码](${{ env.REPO_URL }})更新记录
           - ${{ needs.Setup.outputs.version-info }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   Cleanup:
     needs: [Setup, Build]
