@@ -453,7 +453,7 @@ jobs:
 
     # 步骤12：上传bin目录
     - name: 上传bin目录
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+      if: steps.compile.outputs.status == 'success' && ${{ env.UPLOAD_BIN_DIR }} == 'true'
       uses: actions/upload-artifact@main
       with:
         name: ${{ needs.prepare.outputs.source-repo }}-bin-${{ needs.prepare.outputs.device-target }}-${{ needs.prepare.outputs.device-subtarget }}-${{ matrix.config }}-${{ env.FILE_DATE }}
@@ -496,7 +496,7 @@ jobs:
 
     # 步骤14：上传固件到Artifact
     - name: 上传固件到Artifact
-      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
+      if: steps.compile.outputs.status == 'success' && ${{ env.FIRMWARE_RELEASE }} != 'true'
       uses: actions/upload-artifact@main
       with:
         name: ${{ needs.prepare.outputs.source-repo }}-firmware-${{ needs.prepare.outputs.device-target }}-${{ needs.prepare.outputs.device-subtarget }}-${{ matrix.config }}-${{ env.FILE_DATE }}
