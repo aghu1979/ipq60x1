@@ -518,7 +518,7 @@ jobs:
     name: 发布固件
     needs: [prepare, build]
     runs-on: ubuntu-22.04
-    if: success() && env.FIRMWARE_RELEASE == 'true'
+    if: success() && ${{ env.FIRMWARE_RELEASE }} == 'true'
 
     steps:
     # 步骤1：检出代码
