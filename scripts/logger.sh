@@ -1,186 +1,128 @@
 #!/bin/bash
 
-# 日志脚本：提供模块化的日志功能
-# 作者：AI助手
-# 用途：为其他脚本提供统一的日志记录功能
+# 日志脚本：模块化设置日志
 
-# 日志级别定义
-readonly LOG_LEVEL_DEBUG=0
-readonly LOG_LEVEL_INFO=1
-readonly LOG_LEVEL_WARNING=2
-readonly LOG_LEVEL_ERROR=3
+# 日志级别
+LOG_LEVEL_DEBUG=0
+LOG_LEVEL_INFO=1
+LOG_LEVEL_WARN=2
+LOG_LEVEL_ERROR=3
 
-# 默认日志级别
-LOG_LEVEL=${LOG_LEVEL:-$LOG_LEVEL_INFO}
-
-# 日志颜色定义
-readonly COLOR_DEBUG='\033[0;36m'    # 青色
-readonly COLOR_INFO='\033[0;32m'     # 绿色
-readonly COLOR_WARNING='\033[0;33m'  # 黄色
-readonly COLOR_ERROR='\033[0;31m'    # 红色
-readonly COLOR_RESET='\033[0m'       # 重置
+# 当前日志级别，可通过环境变量LOG_LEVEL设置
+CURRENT_LOG_LEVEL=${LOG_LEVEL:-$LOG_LEVEL_INFO}
 
 # 日志文件路径
-LOG_FILE=${LOG_FILE:-"/tmp/immortalwrt_build.log"}
+LOG_FILE=${LOG_FILE:-"/tmp/openwrt_build.log"}
 
-# 函数：获取当前时间戳
-get_timestamp() {
-    date +"%Y-%m-%d %H:%M:%S"
+# 初始化日志文件
+init_log() {
+    mkdir -p "$(dirname "$LOG_FILE")"
+    echo "===== OpenWrt Build Log - $(date) =====" > "$LOG_FILE"
 }
 
-# 函数：记录日志
-# 参数：$1 - 日志级别，$2 - 日志消息
-log() {
+# 写入日志
+write_log() {
     local level=$1
-    local message=$2
-    local timestamp=$(get_timestamp)
+    local level_name=$2
+    local message=$3
     
-    # 输出到控制台
-    case $level in
-        $LOG_LEVEL_DEBUG)
-            echo -e "${COLOR_DEBUG}[DEBUG]${COLOR_RESET} [${timestamp}] ${message}"
-            ;;
-        $LOG_LEVEL_INFO)
-            echo -e "${COLOR_INFO}[INFO]${COLOR_RESET} [${timestamp}] ${message}"
-            ;;
-        $LOG_LEVEL_WARNING)
-            echo -e "${COLOR_WARNING}[WARNING]${COLOR_RESET} [${timestamp}] ${message}"
-            ;;
-        $LOG_LEVEL_ERROR)
-            echo -e "${COLOR_ERROR}[ERROR]${COLOR_RESET} [${timestamp}] ${message}"
-            ;;
-    esac
-    
-    # 输出到日志文件
-    local level_name=""
-    case $level in
-        $LOG_LEVEL_DEBUG)
-            level_name="DEBUG"
-            ;;
-        $LOG_LEVEL_INFO)
-            level_name="INFO"
-            ;;
-        $LOG_LEVEL_WARNING)
-            level_name="WARNING"
-            ;;
-        $LOG_LEVEL_ERROR)
-            level_name="ERROR"
-            ;;
-    esac
-    
-    echo "[${timestamp}] [${level_name}] ${message}" >> "$LOG_FILE"
+    if [ $level -ge $CURRENT_LOG_LEVEL ]; then
+        local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+        local log_entry="[$timestamp] [$level_name] $message"
+        
+        # 输出到控制台
+        echo "$log_entry"
+        
+        # 写入日志文件
+        echo "$log_entry" >> "$LOG_FILE"
+    fi
 }
 
-# 函数：记录调试日志
-# 参数：$1 - 日志消息
+# 调试日志
 log_debug() {
-    if [ $LOG_LEVEL -le $LOG_LEVEL_DEBUG ]; then
-        log $LOG_LEVEL_DEBUG "$1"
-    fi
+    write_log $LOG_LEVEL_DEBUG "DEBUG" "$1"
 }
 
-# 函数：记录信息日志
-# 参数：$1 - 日志消息
+# 信息日志
 log_info() {
-    if [ $LOG_LEVEL -le $LOG_LEVEL_INFO ]; then
-        log $LOG_LEVEL_INFO "$1"
-    fi
+    write_log $LOG_LEVEL_INFO "INFO" "$1"
 }
 
-# 函数：记录警告日志
-# 参数：$1 - 日志消息
-log_warning() {
-    if [ $LOG_LEVEL -le $LOG_LEVEL_WARNING ]; then
-        log $LOG_LEVEL_WARNING "$1"
-    fi
+# 警告日志
+log_warn() {
+    write_log $LOG_LEVEL_WARN "WARN" "$1"
 }
 
-# 函数：记录错误日志
-# 参数：$1 - 日志消息
+# 错误日志
 log_error() {
-    if [ $LOG_LEVEL -le $LOG_LEVEL_ERROR ]; then
-        log $LOG_LEVEL_ERROR "$1"
-    fi
+    write_log $LOG_LEVEL_ERROR "ERROR" "$1"
 }
 
-# 函数：设置日志级别
-# 参数：$1 - 日志级别 (DEBUG/INFO/WARNING/ERROR)
-set_log_level() {
-    local level_name=$(echo "$1" | tr '[:lower:]' '[:upper:]')
+# 记录命令执行
+log_command() {
+    local cmd="$1"
+    local description="${2:-执行命令}"
     
-    case $level_name in
-        "DEBUG")
-            LOG_LEVEL=$LOG_LEVEL_DEBUG
-            ;;
-        "INFO")
-            LOG_LEVEL=$LOG_LEVEL_INFO
-            ;;
-        "WARNING")
-            LOG_LEVEL=$LOG_LEVEL_WARNING
-            ;;
-        "ERROR")
-            LOG_LEVEL=$LOG_LEVEL_ERROR
-            ;;
-        *)
-            log_warning "未知的日志级别: $1，使用默认级别 INFO"
-            LOG_LEVEL=$LOG_LEVEL_INFO
-            ;;
-    esac
+    log_info "$description: $cmd"
+    eval "$cmd" 2>&1 | tee -a "$LOG_FILE"
+    local exit_code=${PIPESTATUS[0]}
     
-    log_info "日志级别设置为: $level_name"
-}
-
-# 函数：设置日志文件路径
-# 参数：$1 - 日志文件路径
-set_log_file() {
-    local log_file="$1"
-    
-    # 创建日志文件目录（如果不存在）
-    local log_dir=$(dirname "$log_file")
-    mkdir -p "$log_dir"
-    
-    LOG_FILE="$log_file"
-    log_info "日志文件设置为: $log_file"
-}
-
-# 函数：清理日志文件
-# 参数：$1 - 保留天数（可选，默认7天）
-cleanup_log() {
-    local retain_days=${1:-7}
-    
-    if [ -f "$LOG_FILE" ]; then
-        # 创建备份文件
-        local backup_file="${LOG_FILE}.$(date +"%Y%m%d_%H%M%S").bak"
-        cp "$LOG_FILE" "$backup_file"
-        
-        # 清空当前日志文件
-        > "$LOG_FILE"
-        
-        # 删除超过保留天数的备份文件
-        find "$(dirname "$LOG_FILE")" -name "$(basename "$LOG_FILE").*.bak" -mtime +$retain_days -delete
-        
-        log_info "日志文件已清理，备份文件保留 $retain_days 天"
+    if [ $exit_code -ne 0 ]; then
+        log_error "$description 失败，退出码: $exit_code"
+        return $exit_code
     else
-        log_warning "日志文件不存在: $LOG_FILE"
+        log_info "$description 成功"
+        return 0
     fi
 }
 
-# 函数：上传日志文件（在CI环境中使用）
-upload_log() {
-    if [ -n "$GITHUB_ACTIONS" ]; then
-        if [ -f "$LOG_FILE" ]; then
-            echo "::group::上传日志文件"
-            echo "日志文件路径: $LOG_FILE"
-            echo "日志文件内容:"
-            cat "$LOG_FILE"
-            echo "::endgroup::"
+# 记录系统状态
+log_system_status() {
+    log_info "===== 系统状态 ====="
+    
+    # CPU信息
+    log_info "CPU信息:"
+    log_command "cat /proc/cpuinfo | grep 'model name' | uniq" "获取CPU型号"
+    
+    # 内存信息
+    log_info "内存信息:"
+    log_command "free -h" "获取内存使用情况"
+    
+    # 磁盘信息
+    log_info "磁盘信息:"
+    log_command "df -h" "获取磁盘使用情况"
+    
+    # 负载信息
+    log_info "系统负载:"
+    log_command "uptime" "获取系统负载"
+}
+
+# 记录编译状态
+log_build_status() {
+    local build_dir=$1
+    local variant=$2
+    
+    log_info "===== $variant 编译状态 ====="
+    
+    if [ -d "$build_dir" ]; then
+        # 检查构建目录大小
+        log_command "du -sh $build_dir" "获取构建目录大小"
+        
+        # 检查输出目录
+        if [ -d "$build_dir/bin/targets" ]; then
+            log_command "find $build_dir/bin/targets -name '*.img' -o -name '*.bin' | head -10" "查找生成的固件文件"
         else
-            echo "日志文件不存在: $LOG_FILE"
+            log_warn "未找到输出目录 $build_dir/bin/targets"
         fi
+    else
+        log_error "构建目录 $build_dir 不存在"
     fi
 }
 
-# 初始化日志
-log_info "日志系统初始化完成"
-log_info "日志级别: $LOG_LEVEL"
-log_info "日志文件: $LOG_FILE"
+# 上传日志文件
+upload_log() {
+    if [ -f "$LOG_FILE" ]; then
+        log_info "上传日志文件: $LOG_FILE"
+        # 这里可以添加上传日志到云存储的逻辑
+    fi
+}
