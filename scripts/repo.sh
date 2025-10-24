@@ -1,37 +1,63 @@
 #!/bin/bash
 
-# 仓库配置脚本：用于配置第三方软件源
-# 作者：AI助手
-# 用途：添加ImmortalWrt固件的第三方软件源
+# 仓库配置脚本：配置第三方软件元仓库
 
 # 导入日志函数
-source $(dirname "${BASH_SOURCE[0]}")/logger.sh
-
-# 记录日志
-log_info "开始执行仓库配置脚本"
+source "$(dirname "$0")/logger.sh"
 
 # 添加第三方软件源
-log_info "添加第三方软件源: https://github.com/kenzok8/small-package"
-
-# 检查是否存在feeds.conf.default文件
-if [ -f "feeds.conf.default" ]; then
-    # 备份原始文件
-    cp feeds.conf.default feeds.conf.default.bak
+add_custom_feeds() {
+    local openwrt_dir=${1:-"."}
+    local feeds_conf="$openwrt_dir/feeds.conf.default"
     
-    # 添加第三方软件源
-    echo "src-git small https://github.com/kenzok8/small-package" >> feeds.conf.default
+    log_info "添加第三方软件源"
     
-    log_info "第三方软件源添加完成"
-else
-    log_error "feeds.conf.default文件不存在"
-    exit 1
-fi
+    if [ -f "$feeds_conf" ]; then
+        # 备份原文件
+        cp "$feeds_conf" "$feeds_conf.bak"
+        
+        # 添加kenzok8的small-package仓库
+        echo "src-git small https://github.com/kenzok8/small-package" >> "$feeds_conf"
+        
+        # 添加其他常用仓库
+        echo "src-git passwall https://github.com/xiaorouji/openwrt-passwall" >> "$feeds_conf"
+        echo "src-git openclash https://github.com/vernesong/OpenClash" >> "$feeds_conf"
+        
+        log_info "成功添加第三方软件源"
+    else
+        log_error "未找到feeds配置文件: $feeds_conf"
+        return 1
+    fi
+}
 
-# 添加自定义软件包（可选）
-# log_info "添加自定义软件包"
-# git clone https://github.com/kenzok8/small-package.git package/small-package
+# 更新feeds
+update_feeds() {
+    local openwrt_dir=${1:-"."}
+    
+    log_info "更新feeds"
+    
+    cd "$openwrt_dir"
+    
+    # 更新所有feeds
+    log_command "./scripts/feeds update -a" "更新所有feeds"
+    
+    # 安装所有feeds
+    log_command "./scripts/feeds install -a" "安装所有feeds"
+    
+    cd - > /dev/null
+}
 
-# 记录日志
-log_info "仓库配置脚本执行完成"
+# 主函数
+main() {
+    local openwrt_dir=${1:-"."}
+    
+    log_info "开始配置第三方软件元仓库"
+    
+    add_custom_feeds "$openwrt_dir"
+    update_feeds "$openwrt_dir"
+    
+    log_info "第三方软件元仓库配置完成"
+}
 
-exit 0
+# 执行主函数
+main "$@"
