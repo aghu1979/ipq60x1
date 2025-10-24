@@ -1,79 +1,45 @@
-# 工作流名称：编译ImmortalWrt固件（支持Pro/Max/Ultra三种配置）
-name: Build ImmortalWrt for IPQ60xx (Pro/Max/Ultra)
+name: IPQ60xx-ImmortalWrt-MultiBuild
 
-# 触发条件：手动触发、工作流调用和定时任务（已注释）
 on:
   workflow_dispatch:
-    inputs:
-      # 允许用户选择要编译的配置
-      build_config:
-        description: '选择要编译的配置'
-        required: true
-        default: 'all'
-        type: choice
-        options:
-        - all
-        - Pro
-        - Max
-        - Ultra
   workflow_call:
   # schedule:
   #   - cron: 0 20 * * *
 
-# 环境变量设置
 env:
-  # 源代码仓库信息
   REPO_URL: https://github.com/laipeng668/immortalwrt.git
   REPO_BRANCH: master
-  
-  # 基础配置文件路径
-  BASE_CONFIG_FILE: configs/base_ipq60xx.config
-  IMMWRT_CONFIG_FILE: configs/base_immwrt.config
-  
-  # 上传设置
+  FEEDS_CONF: feeds.conf.default
+  DIY_P1_SH: scripts/diy.sh
+  DIY_P2_SH: scripts/repo.sh
   UPLOAD_BIN_DIR: false
   FIRMWARE_RELEASE: true
-  
-  # 时区设置
   TZ: Asia/Shanghai
-  
-  # 缓存设置
-  CACHE_LEVELS: "toolchain,feeds,dl"
-  
-  # 日志级别
-  LOG_LEVEL: "INFO"
+  # 定义三个变体
+  VARIANTS: "Ultra Max Pro"
+  # 基础配置文件
+  BASE_CONFIG: configs/base_ipq60xx.config
+  IMMWRT_CONFIG: configs/base_immwrt.config
 
-# 任务定义
 jobs:
-  # 准备阶段：设置环境和共享资源
-  prepare:
-    name: 准备编译环境
+  Setup:
     runs-on: ubuntu-22.04
     outputs:
-      # 输出矩阵配置，供后续任务使用
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-      # 输出源代码路径
-      openwrt-path: ${{ steps.setup.outputs.openwrt-path }}
-      # 输出版本信息
-      version-info: ${{ steps.setup.outputs.version-info }}
-      # 输出内核版本
-      version-kernel: ${{ steps.setup.outputs.version-kernel }}
-      # 输出源代码仓库信息
-      source-repo: ${{ steps.setup.outputs.source-repo }}
-      # 输出设备目标信息
-      device-target: ${{ steps.setup.outputs.device-target }}
-      # 输出设备子目标信息
-      device-subtarget: ${{ steps.setup.outputs.device-subtarget }}
-      # 输出哈希值
-      hash: ${{ steps.setup.outputs.hash }}
-      # 输出缓存日期
-      cache-date: ${{ steps.setup.outputs.cache-date }}
+      cache-key: ${{ steps.cache-key.outputs.key }}
+      build-date: ${{ steps.build-date.outputs.date }}
+      file-date: ${{ steps.build-date.outputs.file-date }}
+      version-info: ${{ steps.version-info.outputs.info }}
+      version-kernel: ${{ steps.version-info.outputs.kernel }}
+      source-repo: ${{ steps.vars.outputs.source-repo }}
+      device-target: ${{ steps.vars.outputs.device-target }}
+      device-subtarget: ${{ steps.vars.outputs.device-subtarget }}
+      hash: ${{ steps.vars.outputs.hash }}
 
     steps:
-    # 步骤1：检查服务器性能
     - name: 检查服务器性能
       run: |
-        echo "⚠️ 警告：分配的服务器性能有限，若选择的插件过多，务必注意CPU性能！"
+        echo "警告⚠"
+        echo "分配的服务器性能有限，若选择的插件过多，务必注意CPU性能！"
         echo -e "已知CPU型号（降序）：7763，8370C，8272CL，8171M，E5-2673 \n"
         echo "--------------------------CPU信息--------------------------"
         echo "CPU物理数量：$(cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l)"
@@ -84,553 +50,316 @@ jobs:
         echo "--------------------------硬盘信息--------------------------"
         echo "硬盘数量：$(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
 
-    # 步骤2：初始化环境
     - name: 初始化环境
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        # 更新软件包列表
         sudo -E apt-get -y update
-        # 安装编译所需的依赖
         sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
-        # 重新加载系统守护进程
         sudo -E systemctl daemon-reload
-        # 设置时区
         sudo timedatectl set-timezone "$TZ"
 
-    # 步骤3：检出代码
     - name: 检出代码
       uses: actions/checkout@main
 
-    # 步骤4：设置编译环境和变量
-    - name: 设置编译环境和变量
-      id: setup
+    - name: 克隆源代码
       run: |
-        # 导入日志函数
-        source $GITHUB_WORKSPACE/scripts/logger.sh
-        
-        # 记录日志
-        log_info "开始设置编译环境"
-        
-        # 检查磁盘空间
         df -hT $GITHUB_WORKSPACE
-        
-        # 创建工作目录
         sudo mkdir -p /mnt/openwrt
         sudo chown -R $(id -u):$(id -g) /mnt/openwrt
-        
-        # 克隆源代码
-        log_info "克隆源代码: $REPO_URL (分支: $REPO_BRANCH)"
         git clone --depth 1 -b $REPO_BRANCH --single-branch $REPO_URL /mnt/openwrt
-        
-        # 进入源代码目录
         cd /mnt/openwrt
-        
-        # 设置环境变量
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-        
-        # 获取版本信息
         VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
         echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
-        echo "version-info=$VERSION_INFO" >> $GITHUB_OUTPUT
-        
-        # 获取内核版本
         VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12)
         echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
-        echo "version-kernel=$VERSION_KERNEL" >> $GITHUB_OUTPUT
-        
-        # 生成临时配置文件以获取设备信息
-        cat $GITHUB_WORKSPACE/$BASE_CONFIG_FILE $GITHUB_WORKSPACE/$IMMWRT_CONFIG_FILE > .config
-        make defconfig > /dev/null 2>&1
-        
-        # 获取设备信息
-        SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
-        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
-        echo "source-repo=$SOURCE_REPO" >> $GITHUB_OUTPUT
-        
-        DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
-        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
-        echo "device-target=$DEVICE_TARGET" >> $GITHUB_OUTPUT
-        
-        DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
-        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
-        echo "device-subtarget=$DEVICE_SUBTARGET" >> $GITHUB_OUTPUT
-        
-        # 生成哈希值和缓存日期
-        echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
-        echo "hash=$(git log -1 --pretty=format:'%h')" >> $GITHUB_OUTPUT
-        echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-        echo "cache-date=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_OUTPUT
-        
-        # 设置输出路径
-        echo "openwrt-path=$PWD" >> $GITHUB_OUTPUT
-        
-        log_info "编译环境设置完成"
 
-    # 步骤5：设置矩阵配置
-    - name: 设置矩阵配置
-      id: set-matrix
+    - name: 生成变量
+      id: vars
       run: |
-        # 导入日志函数
-        source $GITHUB_WORKSPACE/scripts/logger.sh
-        
-        # 确定要编译的配置
-        if [ "${{ github.event.inputs.build_config }}" == "all" ] || [ -z "${{ github.event.inputs.build_config }}" ]; then
-          CONFIGS='["Pro", "Max", "Ultra"]'
-        else
-          CONFIGS='["${{ github.event.inputs.build_config }}"]'
-        fi
-        
-        log_info "将要编译的配置: $CONFIGS"
-        
-        # 生成矩阵配置
-        echo "matrix={\"config\": $CONFIGS}" >> $GITHUB_OUTPUT
+        # 使用Ultra配置生成基础变量
+        cp $BASE_CONFIG $IMMWRT_CONFIG configs/Ultra.config /tmp/merged.config
+        cd $OPENWRT_PATH
+        cp /tmp/merged.config .config
+        make defconfig > /dev/null 2>&1
+        SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
+        echo "source-repo=$SOURCE_REPO" >> $GITHUB_OUTPUT
+        DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
+        echo "device-target=$DEVICE_TARGET" >> $GITHUB_OUTPUT
+        DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
+        echo "device-subtarget=$DEVICE_SUBTARGET" >> $GITHUB_OUTPUT
+        echo "hash=$(git log -1 --pretty=format:'%h')" >> $GITHUB_OUTPUT
 
-    # 步骤6：缓存工具链
+    - name: 设置构建日期
+      id: build-date
+      run: |
+        echo "date=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_OUTPUT
+        echo "file-date=$(date +"%Y.%m.%d")" >> $GITHUB_OUTPUT
+
+    - name: 设置版本信息
+      id: version-info
+      run: |
+        echo "info=$VERSION_INFO" >> $GITHUB_OUTPUT
+        echo "kernel=$VERSION_KERNEL" >> $GITHUB_OUTPUT
+
+    - name: 生成缓存键
+      id: cache-key
+      run: |
+        echo "key=${{ steps.vars.outputs.source-repo }}-${{ env.REPO_BRANCH }}-${{ steps.vars.outputs.device-target }}-${{ steps.vars.outputs.device-subtarget }}-${{ steps.vars.outputs.hash }}-${{ steps.build-date.outputs.date }}" >> $GITHUB_OUTPUT
+
     - name: 缓存工具链
       uses: actions/cache@main
       with:
-        key: ${{ steps.setup.outputs.source-repo }}-${{ steps.setup.outputs.hash }}-toolchain-${{ steps.setup.outputs.cache-date }}
-        restore-keys: |
-          ${{ steps.setup.outputs.source-repo }}-${{ steps.setup.outputs.hash }}-toolchain-
-          ${{ steps.setup.outputs.source-repo }}-toolchain-
+        key: ${{ steps.cache-key.outputs.key }}
+        restore-keys: ${{ steps.vars.outputs.source-repo }}-${{ env.REPO_BRANCH }}-${{ steps.vars.outputs.device-target }}-${{ steps.vars.outputs.device-subtarget }}-
         path: |
-          ${{ steps.setup.outputs.openwrt-path }}/.ccache
-          ${{ steps.setup.outputs.openwrt-path }}/staging_dir/toolchain-*
+          ${{ env.OPENWRT_PATH }}/.ccache
+          ${{ env.OPENWRT_PATH }}/staging_dir
+          ${{ env.OPENWRT_PATH }}/dl
 
-    # 步骤7：刷新缓存
     - name: 刷新缓存
       run: |
-        # 导入日志函数
-        source $GITHUB_WORKSPACE/scripts/logger.sh
-        
-        log_info "刷新缓存"
-        
-        # 如果存在staging_dir，则更新时间戳
-        if [ -d "${{ steps.setup.outputs.openwrt-path }}/staging_dir" ]; then
-          find "${{ steps.setup.outputs.openwrt-path }}/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
+        if [ -d "$OPENWRT_PATH/staging_dir" ]; then
+          find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
               find "$dir" -type f -exec touch {} +
           done
         fi
 
-    # 步骤8：安装Feeds
-    - name: 安装Feeds
-      run: |
-        # 导入日志函数
-        source $GITHUB_WORKSPACE/scripts/logger.sh
-        
-        log_info "安装Feeds"
-        
-        # 进入源代码目录
-        cd ${{ steps.setup.outputs.openwrt-path }}
-        
-        # 更新feeds
-        log_info "更新feeds"
-        ./scripts/feeds update -a
-        
-        # 安装feeds
-        log_info "安装feeds"
-        ./scripts/feeds install -a
-
-    # 步骤9：缓存Feeds
-    - name: 缓存Feeds
-      uses: actions/cache@main
-      with:
-        key: ${{ steps.setup.outputs.source-repo }}-${{ steps.setup.outputs.hash }}-feeds-${{ steps.setup.outputs.cache-date }}
-        restore-keys: |
-          ${{ steps.setup.outputs.source-repo }}-${{ steps.setup.outputs.hash }}-feeds-
-          ${{ steps.setup.outputs.source-repo }}-feeds-
-        path: |
-          ${{ steps.setup.outputs.openwrt-path }}/feeds
-          ${{ steps.setup.outputs.openwrt-path }}/package/feeds
-
-  # 编译阶段：使用矩阵策略并行编译多个配置
-  build:
-    name: 编译 ${{ matrix.config }} 配置
-    needs: prepare
+  Build:
+    needs: Setup
     runs-on: ubuntu-22.04
     strategy:
-      # 使用矩阵策略并行编译多个配置
-      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
-      fail-fast: false  # 即使一个配置失败，其他配置继续编译
-
+      matrix:
+        variant: [Ultra, Max, Pro]
+      fail-fast: false
+    
     steps:
-    # 步骤1：检出代码
+    - name: 初始化日志
+      run: |
+        source scripts/logger.sh
+        init_log
+        log_system_status
+
     - name: 检出代码
       uses: actions/checkout@main
 
-    # 步骤2：初始化环境
-    - name: 初始化环境
-      env:
-        DEBIAN_FRONTEND: noninteractive
+    - name: 检查缓存
       run: |
-        # 更新软件包列表
-        sudo -E apt-get -y update
-        # 安装编译所需的依赖
-        sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
-        # 重新加载系统守护进程
-        sudo -E systemctl daemon-reload
-        # 设置时区
-        sudo timedatectl set-timezone "$TZ"
+        source scripts/utils.sh
+        if is_cache_valid "$OPENWRT_PATH/dl" 3; then
+          echo "CACHE_VALID=true" >> $GITHUB_ENV
+          log_info "DL缓存有效，将使用缓存"
+        else
+          echo "CACHE_VALID=false" >> $GITHUB_ENV
+          log_info "DL缓存无效，将重新下载"
+        fi
 
-    # 步骤3：恢复源代码
-    - name: 恢复源代码
+    - name: 准备构建环境
       run: |
-        # 导入日志函数
-        source $GITHUB_WORKSPACE/scripts/logger.sh
+        # 创建构建目录
+        BUILD_DIR="/mnt/openwrt-${{ matrix.variant }}"
+        sudo mkdir -p $BUILD_DIR
+        sudo chown -R $(id -u):$(id -g) $BUILD_DIR
         
-        log_info "恢复源代码"
-        
-        # 检查源代码目录是否存在
-        if [ ! -d "${{ needs.prepare.outputs.openwrt-path }}" ]; then
-          log_error "源代码目录不存在，请检查准备阶段是否成功"
-          exit 1
+        # 复制源代码
+        if [ "$CACHE_VALID" == "true" ]; then
+          # 使用硬链接复制以节省空间
+          cp -al /mnt/openwrt/. $BUILD_DIR
+          log_info "使用硬链接复制源代码"
+        else
+          # 完全复制
+          cp -r /mnt/openwrt/. $BUILD_DIR
+          log_info "完全复制源代码"
         fi
         
-        # 进入源代码目录
-        cd ${{ needs.prepare.outputs.openwrt-path }}
-        
-        # 设置环境变量
-        echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
+        echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
+        echo "OPENWRT_PATH=$BUILD_DIR" >> $GITHUB_ENV
 
-    # 步骤4：恢复工具链缓存
-    - name: 恢复工具链缓存
-      uses: actions/cache@main
-      with:
-        key: ${{ needs.prepare.outputs.source-repo }}-${{ needs.prepare.outputs.hash }}-toolchain-${{ needs.prepare.outputs.cache-date }}
-        restore-keys: |
-          ${{ needs.prepare.outputs.source-repo }}-${{ needs.prepare.outputs.hash }}-toolchain-
-          ${{ needs.prepare.outputs.source-repo }}-toolchain-
-        path: |
-          ${{ needs.prepare.outputs.openwrt-path }}/.ccache
-          ${{ needs.prepare.outputs.openwrt-path }}/staging_dir/toolchain-*
-
-    # 步骤5：恢复Feeds缓存
-    - name: 恢复Feeds缓存
-      uses: actions/cache@main
-      with:
-        key: ${{ needs.prepare.outputs.source-repo }}-${{ needs.prepare.outputs.hash }}-feeds-${{ needs.prepare.outputs.cache-date }}
-        restore-keys: |
-          ${{ needs.prepare.outputs.source-repo }}-${{ needs.prepare.outputs.hash }}-feeds-
-          ${{ needs.prepare.outputs.source-repo }}-feeds-
-        path: |
-          ${{ needs.prepare.outputs.openwrt-path }}/feeds
-          ${{ needs.prepare.outputs.openwrt-path }}/package/feeds
-
-    # 步骤6：合并配置文件
     - name: 合并配置文件
       run: |
-        # 导入日志函数
-        source $GITHUB_WORKSPACE/scripts/logger.sh
-        
-        log_info "开始合并配置文件: ${{ matrix.config }}"
-        
-        # 进入源代码目录
-        cd ${{ needs.prepare.outputs.openwrt-path }}
+        source scripts/logger.sh
+        source scripts/utils.sh
         
         # 合并配置文件
-        cat $GITHUB_WORKSPACE/$BASE_CONFIG_FILE $GITHUB_WORKSPACE/$IMMWRT_CONFIG_FILE $GITHUB_WORKSPACE/configs/${{ matrix.config }}.config > .config
+        MERGED_CONFIG="/tmp/${{ matrix.variant }}.config"
+        merge_configs "$BASE_CONFIG" "$IMMWRT_CONFIG" "configs/${{ matrix.variant }}.config" "$MERGED_CONFIG"
         
-        log_info "配置文件合并完成"
+        # 复制到构建目录
+        cp "$MERGED_CONFIG" "$OPENWRT_PATH/.config"
         
-        # 记录合并前的luci软件包列表
-        log_info "记录合并前的luci软件包列表"
-        grep "^CONFIG_PACKAGE_luci-" .config | sort > $GITHUB_WORKSPACE/luci_before_${{ matrix.config }}.txt
-        
-        # 运行defconfig补全配置
-        log_info "运行defconfig补全配置"
-        make defconfig
-        
-        # 记录合并后的luci软件包列表
-        log_info "记录合并后的luci软件包列表"
-        grep "^CONFIG_PACKAGE_luci-" .config | sort > $GITHUB_WORKSPACE/luci_after_${{ matrix.config }}.txt
-        
-        # 比较luci软件包列表的变化
-        log_info "比较luci软件包列表的变化"
-        if [ -f $GITHUB_WORKSPACE/luci_before_${{ matrix.config }}.txt ] && [ -f $GITHUB_WORKSPACE/luci_after_${{ matrix.config }}.txt ]; then
-          diff -u $GITHUB_WORKSPACE/luci_before_${{ matrix.config }}.txt $GITHUB_WORKSPACE/luci_after_${{ matrix.config }}.txt > $GITHUB_WORKSPACE/luci_diff_${{ matrix.config }}.txt || true
-          
-          if [ -s $GITHUB_WORKSPACE/luci_diff_${{ matrix.config }}.txt ]; then
-            log_info "luci软件包列表有变化，差异已保存到 luci_diff_${{ matrix.config }}.txt"
-          else
-            log_info "luci软件包列表无变化"
-          fi
-        else
-          log_error "无法比较luci软件包列表，文件不存在"
-        fi
+        log_info "配置文件合并完成: ${{ matrix.variant }}"
 
-    # 步骤7：加载自定义脚本
-    - name: 加载自定义脚本
+    - name: 比较软件包列表
       run: |
-        # 导入日志函数
-        source $GITHUB_WORKSPACE/scripts/logger.sh
+        source scripts/logger.sh
         
-        log_info "加载自定义脚本"
+        # 创建输出目录
+        OUTPUT_DIR="$GITHUB_WORKSPACE/package-compare-${{ matrix.variant }}"
+        mkdir -p "$OUTPUT_DIR"
         
-        # 进入源代码目录
-        cd ${{ needs.prepare.outputs.openwrt-path }}
+        # 比较软件包列表
+        chmod +x scripts/compare_packages.sh
+        scripts/compare_packages.sh "$OPENWRT_PATH/.config" "$OPENWRT_PATH" "${{ matrix.variant }}" "$OUTPUT_DIR"
         
-        # 执行自定义脚本
-        if [ -f "$GITHUB_WORKSPACE/scripts/diy.sh" ]; then
-          chmod +x $GITHUB_WORKSPACE/scripts/diy.sh
-          $GITHUB_WORKSPACE/scripts/diy.sh
-          log_info "自定义脚本执行完成"
-        else
-          log_warning "自定义脚本不存在，跳过"
-        fi
-        
-        # 执行仓库配置脚本
-        if [ -f "$GITHUB_WORKSPACE/scripts/repo.sh" ]; then
-          chmod +x $GITHUB_WORKSPACE/scripts/repo.sh
-          $GITHUB_WORKSPACE/scripts/repo.sh
-          log_info "仓库配置脚本执行完成"
-        else
-          log_warning "仓库配置脚本不存在，跳过"
-        fi
+        # 上传比较结果
+        echo "PACKAGE_COMPARE_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
 
-    # 步骤8：缓存下载文件
-    - name: 缓存下载文件
-      uses: actions/cache@main
-      with:
-        key: ${{ needs.prepare.outputs.source-repo }}-${{ needs.prepare.outputs.hash }}-dl-${{ needs.prepare.outputs.cache-date }}
-        restore-keys: |
-          ${{ needs.prepare.outputs.source-repo }}-${{ needs.prepare.outputs.hash }}-dl-
-          ${{ needs.prepare.outputs.source-repo }}-dl-
-        path: |
-          ${{ needs.prepare.outputs.openwrt-path }}/dl
-
-    # 步骤9：下载软件包
-    - name: 下载软件包
+    - name: 安装Feeds
       run: |
-        # 导入日志函数
-        source $GITHUB_WORKSPACE/scripts/logger.sh
+        source scripts/logger.sh
         
-        log_info "下载软件包"
+        cd $OPENWRT_PATH
         
-        # 进入源代码目录
-        cd ${{ needs.prepare.outputs.openwrt-path }}
-        
-        # 下载软件包
-        make download -j$(nproc)
-        
-        log_info "软件包下载完成"
+        # 如果缓存无效，更新feeds
+        if [ "$CACHE_VALID" != "true" ]; then
+          log_command "./scripts/feeds update -a" "更新feeds"
+          log_command "./scripts/feeds install -a" "安装feeds"
+        else
+          log_info "使用缓存的feeds"
+        fi
 
-    # 步骤10：编译固件
+    - name: 加载自定义配置
+      run: |
+        source scripts/logger.sh
+        
+        chmod +x $DIY_P1_SH
+        chmod +x $DIY_P2_SH
+        
+        cd $OPENWRT_PATH
+        $GITHUB_WORKSPACE/$DIY_P1_SH "$OPENWRT_PATH"
+        $GITHUB_WORKSPACE/$DIY_P2_SH "$OPENWRT_PATH"
+
+    - name: 下载DL软件包
+      run: |
+        source scripts/logger.sh
+        
+        cd $OPENWRT_PATH
+        log_command "make defconfig" "执行defconfig"
+        
+        # 如果缓存无效，下载软件包
+        if [ "$CACHE_VALID" != "true" ]; then
+          log_command "make download -j$(nproc)" "下载软件包"
+        else
+          log_info "使用缓存的软件包"
+        fi
+
     - name: 编译固件
       id: compile
       run: |
-        # 导入日志函数
-        source $GITHUB_WORKSPACE/scripts/logger.sh
+        source scripts/logger.sh
         
-        log_info "开始编译固件: ${{ matrix.config }}"
-        
-        # 进入源代码目录
-        cd ${{ needs.prepare.outputs.openwrt-path }}
-        
-        # 设置编译线程数
+        cd $OPENWRT_PATH
         echo -e "$(nproc) thread compile"
         
-        # 编译固件
-        # 首先尝试使用所有核心编译，如果失败则使用单核编译
-        make -j$(nproc) || make -j1 || make -j1 V=s
+        # 记录编译开始时间
+        BUILD_START=$(date +%s)
+        echo "BUILD_START=$BUILD_START" >> $GITHUB_ENV
         
-        # 检查编译结果
-        if [ $? -eq 0 ]; then
-          log_info "固件编译成功"
+        # 编译固件
+        if log_command "make -j$(nproc) || make -j1 || make -j1 V=s" "编译固件"; then
           echo "status=success" >> $GITHUB_OUTPUT
-          echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-          echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+          log_info "编译成功"
         else
-          log_error "固件编译失败"
-          echo "status=failure" >> $GITHUB_OUTPUT
+          echo "status=failed" >> $GITHUB_OUTPUT
+          log_error "编译失败"
           exit 1
         fi
+        
+        # 记录编译结束时间
+        BUILD_END=$(date +%s)
+        BUILD_TIME=$((BUILD_END - BUILD_START))
+        echo "BUILD_TIME=$BUILD_TIME" >> $GITHUB_ENV
+        log_info "编译耗时: $BUILD_TIME 秒"
 
-    # 步骤11：检查空间使用情况
     - name: 检查空间使用情况
       if: (!cancelled())
       run: df -hT
 
-    # 步骤12：上传bin目录
-    - name: 上传bin目录
-      if: steps.compile.outputs.status == 'success' && ${{ env.UPLOAD_BIN_DIR }} == 'true'
-      uses: actions/upload-artifact@main
-      with:
-        name: ${{ needs.prepare.outputs.source-repo }}-bin-${{ needs.prepare.outputs.device-target }}-${{ needs.prepare.outputs.device-subtarget }}-${{ matrix.config }}-${{ env.FILE_DATE }}
-        path: ${{ needs.prepare.outputs.openwrt-path }}/bin
-
-    # 步骤13：整理文件
     - name: 整理文件
       if: steps.compile.outputs.status == 'success'
       run: |
-        # 导入日志函数
-        source $GITHUB_WORKSPACE/scripts/logger.sh
+        source scripts/logger.sh
         
-        log_info "整理文件"
-        
-        # 进入固件目录
-        cd ${{ needs.prepare.outputs.openwrt-path }}/bin/targets/*/*
+        cd $OPENWRT_PATH/bin/targets/*/*
         
         # 复制配置文件
-        cp ${{ needs.prepare.outputs.openwrt-path }}/.config ${{ matrix.config }}.config
+        cp $OPENWRT_PATH/.config ${{ matrix.variant }}.config
         
         # 重命名文件
-        mv config.buildinfo ${{ matrix.config }}.config.buildinfo
-        mv immortalwrt-qualcommax-ipq60xx.manifest immortalwrt-qualcommax-ipq60xx-${{ matrix.config }}.manifest
+        mv config.buildinfo ${{ matrix.variant }}.config.buildinfo
+        mv immortalwrt-qualcommax-ipq60xx.manifest immortalwrt-qualcommax-ipq60xx-${{ matrix.variant }}.manifest
         
-        # 复制软件包
-        if [ -d "${{ needs.prepare.outputs.openwrt-path }}/bin/packages" ]; then
-          mkdir -p packages
-          find ${{ needs.prepare.outputs.openwrt-path }}/bin/packages -name "*.ipk" -exec cp {} packages/ \;
-          tar -zcf ${{ matrix.config }}.Packages.tar.gz packages
-          rm -rf packages
-        fi
+        # 整理软件包
+        mkdir -p packages
+        mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages 2>/dev/null || true
+        tar -zcf ${{ matrix.variant }}.Packages.tar.gz packages
         
-        # 删除不需要的文件
-        rm -rf feeds.buildinfo version.buildinfo sha256sums profiles.json
+        # 清理不需要的文件
+        rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
         
-        # 设置固件路径环境变量
+        # 设置输出路径
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
         
         log_info "文件整理完成"
 
-    # 步骤14：上传固件到Artifact
-    - name: 上传固件到Artifact
-      if: steps.compile.outputs.status == 'success' && ${{ env.FIRMWARE_RELEASE }} != 'true'
-      uses: actions/upload-artifact@main
-      with:
-        name: ${{ needs.prepare.outputs.source-repo }}-firmware-${{ needs.prepare.outputs.device-target }}-${{ needs.prepare.outputs.device-subtarget }}-${{ matrix.config }}-${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE_PATH }}
-
-    # 步骤15：上传luci软件包差异
-    - name: 上传luci软件包差异
+    - name: 上传软件包比较结果
       if: always()
       uses: actions/upload-artifact@main
       with:
-        name: luci-diff-${{ matrix.config }}
-        path: |
-          $GITHUB_WORKSPACE/luci_before_${{ matrix.config }}.txt
-          $GITHUB_WORKSPACE/luci_after_${{ matrix.config }}.txt
-          $GITHUB_WORKSPACE/luci_diff_${{ matrix.config }}.txt
+        name: package-compare-${{ matrix.variant }}
+        path: ${{ env.PACKAGE_COMPARE_DIR }}
 
-  # 发布阶段：整理和发布固件
-  release:
-    name: 发布固件
-    needs: [prepare, build]
-    runs-on: ubuntu-22.04
-    if: success() && ${{ env.FIRMWARE_RELEASE }} == 'true'
-
-    steps:
-    # 步骤1：检出代码
-    - name: 检出代码
-      uses: actions/checkout@main
-
-    # 步骤2：下载所有固件
-    - name: 下载所有固件
-      uses: actions/download-artifact@main
+    - name: 上传固件到Artifact
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
+      uses: actions/upload-artifact@main
       with:
-        path: artifacts
+        name: ${{ needs.Setup.outputs.source-repo }}-firmware-${{ matrix.variant }}-${{ needs.Setup.outputs.device-target }}-${{ needs.Setup.outputs.device-subtarget }}-${{ needs.Setup.outputs.file-date }}
+        path: ${{ env.FIRMWARE_PATH }}
 
-    # 步骤3：整理固件
-    - name: 整理固件
-      run: |
-        # 导入日志函数
-        source $GITHUB_WORKSPACE/scripts/logger.sh
-        
-        log_info "整理固件"
-        
-        # 创建发布目录
-        mkdir -p release
-        
-        # 复制所有固件到发布目录
-        find artifacts -name "*.img" -exec cp {} release/ \;
-        find artifacts -name "*.tar.gz" -exec cp {} release/ \;
-        find artifacts -name "*.manifest" -exec cp {} release/ \;
-        find artifacts -name "*.config" -exec cp {} release/ \;
-        
-        # 创建固件信息文件
-        cat > release/FirmwareInfo.md << EOF
-        # ImmortalWrt 固件信息
-        
-        ## 基本信息
-        - 源码仓库: ${{ needs.prepare.outputs.repo-url }}
-        - 源码分支: ${{ needs.prepare.outputs.repo-branch }}
-        - 设备目标: ${{ needs.prepare.outputs.device-target }}
-        - 设备子目标: ${{ needs.prepare.outputs.device-subtarget }}
-        - 编译时间: $(date +"%Y-%m-%d %H:%M:%S")
-        
-        ## 版本信息
-        - 内核版本: ${{ needs.prepare.outputs.version-kernel }}
-        - ${{ needs.prepare.outputs.version-info }}
-        
-        ## 配置说明
-        - Pro: 基础配置，包含常用的luci应用
-        - Max: 增强配置，包含更多的luci应用
-        - Ultra: 顶级配置，包含所有可用的luci应用
-        
-        ## 默认设置
-        - 默认IP地址: 192.168.111.1
-        - 默认密码: 无
-        
-        ## 注意事项
-        1. 首次刷机前请备份原厂固件
-        2. 刷机后请恢复出厂设置
-        3. 根据实际需求选择合适的配置版本
-        EOF
-        
-        log_info "固件整理完成"
-
-    # 步骤4：发布固件
-    - name: 发布固件
+    - name: 上传固件到Release
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
       uses: ncipollo/release-action@main
       with:
-        name: ImmortalWrt for IPQ60xx (Pro/Max/Ultra) - ${{ env.FILE_DATE }}
+        name: ${{ needs.Setup.outputs.build-date }} for ${{ matrix.variant }}
         allowUpdates: true
-        tag: ImmortalWrt-IPQ60xx-${{ env.FILE_DATE }}
+        tag: ${{ matrix.variant }}-${{ needs.Setup.outputs.file-date }}
         token: ${{ secrets.GITHUB_TOKEN }}
-        artifacts: release/*
-        bodyFile: release/FirmwareInfo.md
+        artifacts: ${{ env.FIRMWARE_PATH }}/*
+        body: |
+          **This is ImmortalWrt Firmware for ${{ matrix.variant }} variant**
+          ### 📒 固件信息
+          - 这是 ${{ matrix.variant }} 变体的固件，包含以下特性：
+            - Ultra: 包含最多第三方luci软件包
+            - Max: 包含中等数量第三方luci软件包
+            - Pro: 包含最少第三方luci软件包
+          - 💻 这是 IPQ60xx 平台使用的 ImmortalWrt 固件
+          - ⚽ 固件源码: ${{ env.REPO_URL }}
+          - 💝 源码分支: ${{ env.REPO_BRANCH }}
+          - 🌐 默认地址: **192.168.111.1**
+          - 🔑 默认密码: none
+          - ⏱️ 编译耗时: ${{ env.BUILD_TIME }} 秒
+          ### 🧊 固件版本
+          - 固件内核版本：**${{ needs.Setup.outputs.version-kernel }}**
+          - 固件编译前最后一次➦[主源码](${{ env.REPO_URL }})更新记录
+          - ${{ needs.Setup.outputs.version-info }}
 
-  # 清理阶段：清理缓存和临时文件
-  cleanup:
-    name: 清理缓存
-    needs: [prepare, build, release]
+  Cleanup:
+    needs: [Setup, Build]
     runs-on: ubuntu-22.04
     if: always()
-
+    
     steps:
-    # 步骤1：检出代码
-    - name: 检出代码
-      uses: actions/checkout@main
-
-    # 步骤2：删除旧缓存
     - name: 删除旧缓存
       run: |
-        # 导入日志函数
-        source $GITHUB_WORKSPACE/scripts/logger.sh
-        
-        log_info "删除旧缓存"
-        
         # 获取缓存列表并删除
-        gh cache list --key ${{ needs.prepare.outputs.source-repo }}-${{ needs.prepare.outputs.device-target }}-${{ needs.prepare.outputs.device-subtarget }}- --json key --jq '.[] | .key' | while read -r key; do
+        gh cache list --key ${{ needs.Setup.outputs.source-repo }}-${{ env.REPO_BRANCH }}-${{ needs.Setup.outputs.device-target }}-${{ needs.Setup.outputs.device-subtarget }}- --json key --jq '.[] | .key' | while read -r key; do
           gh cache delete "$key"
-          log_info "删除缓存: $key"
         done
-        
         # 输出缓存状态
-        echo "========缓存状态========"
-        if [ -d "${{ needs.prepare.outputs.openwrt-path }}/.ccache" ]; then
-          echo "ccache: $(du -sh ${{ needs.prepare.outputs.openwrt-path }}/.ccache | cut -f 1)"
-        else
-          echo "ccache: 不存在"
-        fi
-        
-        if [ -d "${{ needs.prepare.outputs.openwrt-path }}/staging_dir" ]; then
-          echo "staging: $(du -sh ${{ needs.prepare.outputs.openwrt-path }}/staging_dir | cut -f 1)"
-        else
-          echo "staging: 不存在"
-        fi
-        
-        log_info "缓存清理完成"
+        echo "========cache status========"
+        echo "ccache: $(du -sh /mnt/openwrt/.ccache 2>/dev/null | cut -f 1 || echo "N/A")"
+        echo "staging: $(du -sh /mnt/openwrt/staging_dir 2>/dev/null | cut -f 1 || echo "N/A")"
+        echo "dl: $(du -sh /mnt/openwrt/dl 2>/dev/null | cut -f 1 || echo "N/A")"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
