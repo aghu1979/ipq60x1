@@ -74,8 +74,8 @@ print_diagnostic_summary() {
     echo "🔍 $variant 变体软件包配置诊断摘要"
     echo "================================================================================"
     echo "📊 统计信息:"
-    echo "   - defconfig前软件包数量: $before_count"
-    echo "   - defconfig后软件包数量: $after_count"
+    echo "   - 用户配置的软件包数量: $before_count"
+    echo "   - defconfig后保留的软件包数量: $after_count"
     echo "   - 被删除的软件包数量: $removed_count"
     echo ""
     
@@ -193,6 +193,8 @@ generate_diagnostic_report() {
         .reason { font-size: 0.9em; color: #7f8c8d; }
         .fix-suggestion { background-color: #fff3cd; padding: 10px; border-radius: 5px; margin-top: 10px; }
         .console-output { background-color: #2d3748; color: #e2e8f0; padding: 15px; border-radius: 5px; font-family: monospace; white-space: pre-wrap; }
+        .config-section { background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 10px 0; }
+        .config-title { font-weight: bold; color: #495057; margin-bottom: 10px; }
     </style>
 </head>
 <body>
@@ -204,7 +206,7 @@ generate_diagnostic_report() {
     
     <div class="summary">
         <div class="summary-item">
-            <h3>defconfig前</h3>
+            <h3>用户配置</h3>
             <p class="success">$before_count 个软件包</p>
         </div>
         <div class="summary-item">
@@ -214,6 +216,18 @@ generate_diagnostic_report() {
         <div class="summary-item">
             <h3>已删除</h3>
             <p class="warning">$removed_count 个软件包</p>
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>用户配置的软件包</h2>
+        <div class="config-section">
+            <div class="config-title">defconfig前（用户配置）</div>
+            <pre>$(cat "$before_file")</pre>
+        </div>
+        <div class="config-section">
+            <div class="config-title">defconfig后（系统保留）</div>
+            <pre>$(cat "$after_file")</pre>
         </div>
     </div>
     
@@ -339,11 +353,19 @@ main() {
     # 创建输出目录
     mkdir -p "$output_dir"
     
-    # 获取defconfig前的luci软件包列表
+    # 保存原始配置文件（defconfig前的）
+    local original_config="$output_dir/${variant}_original.config"
+    cp "$config_file" "$original_config"
+    
+    # 获取defconfig前的luci软件包列表（从用户配置）
     local before_file="$output_dir/${variant}_luci_before.txt"
     get_luci_packages "$config_file" > "$before_file"
     
-    log_info "defconfig前的luci软件包数量: $(wc -l < "$before_file")"
+    log_info "用户配置的luci软件包数量: $(wc -l < "$before_file")"
+    log_info "用户配置的luci软件包列表："
+    cat "$before_file" | while read -r pkg; do
+        log_info "  - $pkg"
+    done
     
     # 复制配置文件到OpenWrt目录
     cp "$config_file" "$openwrt_dir/.config"
@@ -352,11 +374,19 @@ main() {
     cd "$openwrt_dir"
     log_command "make defconfig" "执行defconfig"
     
+    # 保存defconfig后的配置文件
+    local defconfig_config="$output_dir/${variant}_defconfig.config"
+    cp "$openwrt_dir/.config" "$defconfig_config"
+    
     # 获取defconfig后的luci软件包列表
     local after_file="$output_dir/${variant}_luci_after.txt"
-    get_luci_packages "$openwrt_path/.config" > "$after_file"
+    get_luci_packages "$openwrt_dir/.config" > "$after_file"
     
     log_info "defconfig后的luci软件包数量: $(wc -l < "$after_file")"
+    log_info "defconfig后的luci软件包列表："
+    cat "$after_file" | while read -r pkg; do
+        log_info "  - $pkg"
+    done
     
     # 在控制台显示诊断摘要
     print_diagnostic_summary "$before_file" "$after_file" "$openwrt_dir" "$variant"
