@@ -213,10 +213,17 @@ jobs:
         MERGED_CONFIG="/tmp/${{ matrix.variant }}.config"
         merge_configs "$BASE_CONFIG" "$IMMWRT_CONFIG" "configs/${{ matrix.variant }}.config" "$MERGED_CONFIG"
         
+        log_info "配置文件合并完成: ${{ matrix.variant }}"
+        
+        # 立即显示合并后的luci软件包
+        log_info "=== 合并后立即检查luci软件包 ==="
+        get_luci_packages "$MERGED_CONFIG" | while read -r pkg; do
+          log_info "  - $pkg"
+        done
+        log_info "=== 检查完成，共 $(get_luci_packages "$MERGED_CONFIG" | wc -l) 个luci软件包 ==="
+        
         # 复制到构建目录
         cp "$MERGED_CONFIG" "$OPENWRT_PATH/.config"
-        
-        log_info "配置文件合并完成: ${{ matrix.variant }}"
 
     - name: 安装Feeds
       run: |
@@ -306,6 +313,8 @@ jobs:
         echo "   2. 确认软件包适用于IPQ60xx架构"
         echo "   3. 检查软件包的依赖关系"
         echo "   4. 更新feeds配置"
+        echo ""
+        echo "💡 提示：诊断报告已上传为构建附件，可在GitHub Actions页面下载查看"
         echo "================================================================================"
         echo ""
         
