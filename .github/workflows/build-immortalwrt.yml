@@ -218,22 +218,37 @@ jobs:
         
         log_info "配置文件合并完成: ${{ matrix.variant }}"
 
-    - name: 比较软件包列表
+    - name: 诊断软件包配置
+      id: diagnose
       run: |
         # 修复：切换到工作目录并加载日志函数
         cd $GITHUB_WORKSPACE
         source scripts/logger.sh
         
         # 创建输出目录
-        OUTPUT_DIR="$GITHUB_WORKSPACE/package-compare-${{ matrix.variant }}"
+        OUTPUT_DIR="$GITHUB_WORKSPACE/package-diagnostic-${{ matrix.variant }}"
         mkdir -p "$OUTPUT_DIR"
         
-        # 比较软件包列表
+        # 诊断软件包配置
         chmod +x scripts/compare_packages.sh
-        scripts/compare_packages.sh "$OPENWRT_PATH/.config" "$OPENWRT_PATH" "${{ matrix.variant }}" "$OUTPUT_DIR"
+        if scripts/compare_packages.sh "$OPENWRT_PATH/.config" "$OPENWRT_PATH" "${{ matrix.variant }}" "$OUTPUT_DIR"; then
+          echo "diagnosis=success" >> $GITHUB_OUTPUT
+          log_info "软件包配置诊断成功"
+        else
+          echo "diagnosis=failed" >> $GITHUB_OUTPUT
+          log_error "软件包配置诊断失败"
+          exit 1
+        fi
         
-        # 上传比较结果
-        echo "PACKAGE_COMPARE_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
+        # 上传诊断结果
+        echo "DIAGNOSTIC_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
+
+    - name: 上传诊断报告
+      if: steps.diagnose.outputs.diagnosis == 'failed'
+      uses: actions/upload-artifact@main
+      with:
+        name: diagnostic-report-${{ matrix.variant }}
+        path: ${{ env.DIAGNOSTIC_DIR }}
 
     - name: 安装Feeds
       run: |
@@ -348,7 +363,7 @@ jobs:
       uses: actions/upload-artifact@main
       with:
         name: package-compare-${{ matrix.variant }}
-        path: ${{ env.PACKAGE_COMPARE_DIR }}
+        path: ${{ env.DIAGNOSTIC_DIR }}
 
     - name: 上传固件到Artifact
       if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
