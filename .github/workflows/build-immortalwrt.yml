@@ -237,6 +237,26 @@ jobs:
         else
           echo "diagnosis=failed" >> $GITHUB_OUTPUT
           log_error "软件包配置诊断失败"
+          
+          # 生成错误摘要
+          echo ""
+          echo "================================================================================"
+          echo "❌ 编译终止：软件包配置存在问题"
+          echo "================================================================================"
+          echo "📋 请查看以下文件了解详情："
+          echo "   - 缺失的软件包列表: ${OUTPUT_DIR}/${{ matrix.variant }}_missing_packages.txt"
+          echo "   - 完整诊断报告: ${OUTPUT_DIR}/${{ matrix.variant }}_diagnostic_report.html"
+          echo ""
+          echo "🔧 修复建议："
+          echo "   1. 检查 configs/${{ matrix.variant }}.config 文件中的软件包名称"
+          echo "   2. 确认软件包适用于IPQ60xx架构"
+          echo "   3. 检查软件包的依赖关系"
+          echo "   4. 更新feeds配置"
+          echo ""
+          echo "💡 提示：诊断报告已上传为构建附件，可在GitHub Actions页面下载查看"
+          echo "================================================================================"
+          echo ""
+          
           exit 1
         fi
         
@@ -244,11 +264,12 @@ jobs:
         echo "DIAGNOSTIC_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
 
     - name: 上传诊断报告
-      if: steps.diagnose.outputs.diagnosis == 'failed'
+      if: always()
       uses: actions/upload-artifact@main
       with:
         name: diagnostic-report-${{ matrix.variant }}
         path: ${{ env.DIAGNOSTIC_DIR }}
+        retention-days: 30
 
     - name: 安装Feeds
       run: |
@@ -357,13 +378,6 @@ jobs:
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
         
         log_info "文件整理完成"
-
-    - name: 上传软件包比较结果
-      if: always()
-      uses: actions/upload-artifact@main
-      with:
-        name: package-compare-${{ matrix.variant }}
-        path: ${{ env.DIAGNOSTIC_DIR }}
 
     - name: 上传固件到Artifact
       if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
