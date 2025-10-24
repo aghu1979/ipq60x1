@@ -376,10 +376,17 @@ main() {
     # 创建输出目录
     mkdir -p "$output_dir"
     
-    # 保存原始配置文件（defconfig前的）
-    local original_config="$output_dir/${variant}_original.config"
-    cp "$config_file" "$original_config"
-    log_info "已保存原始配置文件: $original_config"
+    # 调试：显示输入的配置文件路径
+    log_info "输入的配置文件: $config_file"
+    log_info "配置文件大小: $(du -h "$config_file" 2>/dev/null | cut -f1 || echo "未知")"
+    log_info "配置文件行数: $(wc -l < "$config_file" 2>/dev/null || echo "未知")"
+    
+    # 调试：显示合并后的配置文件内容（前20行）
+    log_info "=== 合并后的配置文件内容（前20行） ==="
+    head -20 "$config_file" 2>/dev/null | while read -r line; do
+        log_info "  $line"
+    done
+    log_info "=== 配置文件内容结束 ==="
     
     # 获取defconfig前的luci软件包列表（从用户配置）
     local before_file="$output_dir/${variant}_luci_before.txt"
@@ -395,7 +402,19 @@ main() {
         done
     else
         log_warn "用户配置中没有找到luci软件包"
+        
+        # 调试：显示配置文件中所有包含luci的行
+        log_info "=== 调试：配置文件中所有包含luci的行 ==="
+        grep -i "luci" "$config_file" 2>/dev/null | while read -r line; do
+            log_info "  $line"
+        done
+        log_info "=== 调试结束 ==="
     fi
+    
+    # 保存原始配置文件（defconfig前的）
+    local original_config="$output_dir/${variant}_original.config"
+    cp "$config_file" "$original_config"
+    log_info "已保存原始配置文件: $original_config"
     
     # 复制配置文件到OpenWrt目录
     cp "$config_file" "$openwrt_dir/.config"
