@@ -37,7 +37,7 @@ get_luci_packages() {
     sort
 }
 
-# 合并配置文件（完全重写）
+# 合并配置文件（完全重写 - 简单直接的方式）
 merge_configs() {
     local base_config=$1
     local immwrt_config=$2
@@ -49,69 +49,49 @@ merge_configs() {
     # 创建临时合并文件
     local temp_config=$(mktemp)
     
-    # 方法：使用awk正确处理配置合并
-    # awk会自动处理重复键，后面的值会覆盖前面的值
-    {
-        # 先处理基础配置
-        if [ -f "$base_config" ]; then
-            log_info "处理基础配置: $base_config"
-            grep -v "^#" "$base_config" | grep -v "^$" >> "$temp_config"
-        else
-            log_error "基础配置文件 $base_config 不存在"
-            exit 1
-        fi
-        
-        # 再处理ImmortalWrt配置（只添加不存在的配置）
-        if [ -f "$immwrt_config" ]; then
-            log_info "处理ImmortalWrt配置: $immwrt_config"
-            grep -v "^#" "$immwrt_config" | grep -v "^$" >> "$temp_config"
-        else
-            log_error "ImmortalWrt配置文件 $immwrt_config 不存在"
-            exit 1
-        fi
-        
-        # 最后处理变体配置（会覆盖前面的同名配置）
-        if [ -f "$variant_config" ]; then
-            log_info "处理变体配置: $variant_config"
-            grep -v "^#" "$variant_config" | grep -v "^$" >> "$temp_config"
-        else
-            log_error "变体配置文件 $variant_config 不存在"
-            exit 1
-        fi
-    }
+    # 方法：简单拼接所有配置文件
+    # OpenWrt的make defconfig会自动处理重复项，后面的会覆盖前面的
     
-    # 使用awk去重并处理配置覆盖
-    awk -F= '!/^#/ && !/^$/ {
-        if ($1 in config) {
-            # 如果键已存在，检查新值是否为y（优先启用）
-            if ($2 == "y") {
-                config[$1] = $0
-            }
-        } else {
-            config[$1] = $0
-        }
-    } END {
-        for (key in config) {
-            print config[key]
-        }
-    }' "$temp_config" > "${temp_config}.merged"
+    # 1. 先添加基础配置
+    if [ -f "$base_config" ]; then
+        log_info "添加基础配置: $base_config"
+        cat "$base_config" >> "$temp_config"
+    else
+        log_error "基础配置文件 $base_config 不存在"
+        exit 1
+    fi
+    
+    # 2. 添加ImmortalWrt配置
+    if [ -f "$immwrt_config" ]; then
+        log_info "添加ImmortalWrt配置: $immwrt_config"
+        cat "$immwrt_config" >> "$temp_config"
+    else
+        log_error "ImmortalWrt配置文件 $immwrt_config 不存在"
+        exit 1
+    fi
+    
+    # 3. 添加变体配置（会覆盖前面的同名配置）
+    if [ -f "$variant_config" ]; then
+        log_info "添加变体配置: $variant_config"
+        cat "$variant_config" >> "$temp_config"
+    else
+        log_error "变体配置文件 $variant_config 不存在"
+        exit 1
+    fi
     
     # 移动到最终位置
-    mv "${temp_config}.merged" "$output_config"
-    rm -f "$temp_config"
+    mv "$temp_config" "$output_config"
     check_status "创建合并配置文件 $output_config"
     
-    # 调试：显示合并后的统计
-    log_info "合并后的配置统计："
-    log_info "  总行数: $(wc -l < "$output_config")"
-    log_info "  luci包数: $(grep "^CONFIG_PACKAGE_luci-.*=y$" "$output_config" | wc -l)"
-    
-    # 调试：列出所有luci包
-    log_info "合并后的luci软件包列表："
+    # 立即显示合并后的luci软件包
+    log_info "=== 合并后的luci软件包列表（用户配置） ==="
+    local luci_count=0
     grep "^CONFIG_PACKAGE_luci-.*=y$" "$output_config" 2>/dev/null | while read -r line; do
         local pkg=$(echo "$line" | sed 's/^CONFIG_PACKAGE_//g' | sed 's/=y$//g')
         log_info "  - $pkg"
+        luci_count=$((luci_count + 1))
     done
+    log_info "=== 用户配置的luci软件包总数: $(grep "^CONFIG_PACKAGE_luci-.*=y$" "$output_config" 2>/dev/null | wc -l) ==="
 }
 
 # 计算文件哈希值
@@ -124,13 +104,19 @@ calc_file_hash() {
     fi
 }
 
-# 检查缓存是否有效
+# 检查缓存是否有效（修复版）
 is_cache_valid() {
     local cache_dir=$1
     local max_age_days=${2:-7}  # 默认缓存有效期为7天
     
     if [ ! -d "$cache_dir" ]; then
         return 1  # 缓存目录不存在
+    fi
+    
+    # 检查缓存目录是否为空
+    if [ -z "$(ls -A "$cache_dir" 2>/dev/null)" ]; then
+        log_warn "缓存目录为空: $cache_dir"
+        return 1
     fi
     
     # 检查缓存目录的最后修改时间
@@ -143,6 +129,7 @@ is_cache_valid() {
         return 1
     fi
     
+    log_info "缓存有效，年龄: $age_days 天"
     return 0
 }
 
