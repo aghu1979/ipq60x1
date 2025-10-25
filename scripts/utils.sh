@@ -37,7 +37,7 @@ get_luci_packages() {
     sort
 }
 
-# 合并配置文件（修复版）
+# 合并配置文件（完全重写）
 merge_configs() {
     local base_config=$1
     local immwrt_config=$2
@@ -49,71 +49,69 @@ merge_configs() {
     # 创建临时合并文件
     local temp_config=$(mktemp)
     
-    # 先复制基础配置
-    if [ -f "$base_config" ]; then
-        cp "$base_config" "$temp_config"
-        check_status "复制基础配置 $base_config"
-    else
-        log_error "基础配置文件 $base_config 不存在"
-        exit 1
-    fi
+    # 方法：使用awk正确处理配置合并
+    # awk会自动处理重复键，后面的值会覆盖前面的值
+    {
+        # 先处理基础配置
+        if [ -f "$base_config" ]; then
+            log_info "处理基础配置: $base_config"
+            grep -v "^#" "$base_config" | grep -v "^$" >> "$temp_config"
+        else
+            log_error "基础配置文件 $base_config 不存在"
+            exit 1
+        fi
+        
+        # 再处理ImmortalWrt配置（只添加不存在的配置）
+        if [ -f "$immwrt_config" ]; then
+            log_info "处理ImmortalWrt配置: $immwrt_config"
+            grep -v "^#" "$immwrt_config" | grep -v "^$" >> "$temp_config"
+        else
+            log_error "ImmortalWrt配置文件 $immwrt_config 不存在"
+            exit 1
+        fi
+        
+        # 最后处理变体配置（会覆盖前面的同名配置）
+        if [ -f "$variant_config" ]; then
+            log_info "处理变体配置: $variant_config"
+            grep -v "^#" "$variant_config" | grep -v "^$" >> "$temp_config"
+        else
+            log_error "变体配置文件 $variant_config 不存在"
+            exit 1
+        fi
+    }
     
-    # 合并ImmortalWrt配置（跳过已存在的配置）
-    if [ -f "$immwrt_config" ]; then
-        # 只添加不存在的配置项
-        while IFS= read -r line; do
-            # 跳过注释和空行
-            [[ "$line" =~ ^# ]] && continue
-            [[ -z "$line" ]] && continue
-            
-            # 提取配置键（去掉值部分）
-            config_key=$(echo "$line" | cut -d'=' -f1)
-            
-            # 检查是否已存在
-            if ! grep -q "^${config_key}=" "$temp_config"; then
-                echo "$line" >> "$temp_config"
-            fi
-        done < "$immwrt_config"
-        check_status "合并ImmortalWrt配置 $immwrt_config"
-    else
-        log_error "ImmortalWrt配置文件 $immwrt_config 不存在"
-        exit 1
-    fi
-    
-    # 合并变体配置（覆盖已存在的配置）
-    if [ -f "$variant_config" ]; then
-        # 对于变体配置，新配置覆盖旧配置
-        while IFS= read -r line; do
-            # 跳过注释和空行
-            [[ "$line" =~ ^# ]] && continue
-            [[ -z "$line" ]] && continue
-            
-            # 提取配置键
-            config_key=$(echo "$line" | cut -d'=' -f1)
-            
-            # 如果已存在，先删除旧的
-            if grep -q "^${config_key}=" "$temp_config"; then
-                grep -v "^${config_key}=" "$temp_config" > "${temp_config}.tmp"
-                mv "${temp_config}.tmp" "$temp_config"
-            fi
-            
-            # 添加新配置
-            echo "$line" >> "$temp_config"
-        done < "$variant_config"
-        check_status "合并变体配置 $variant_config"
-    else
-        log_error "变体配置文件 $variant_config 不存在"
-        exit 1
-    fi
+    # 使用awk去重并处理配置覆盖
+    awk -F= '!/^#/ && !/^$/ {
+        if ($1 in config) {
+            # 如果键已存在，检查新值是否为y（优先启用）
+            if ($2 == "y") {
+                config[$1] = $0
+            }
+        } else {
+            config[$1] = $0
+        }
+    } END {
+        for (key in config) {
+            print config[key]
+        }
+    }' "$temp_config" > "${temp_config}.merged"
     
     # 移动到最终位置
-    mv "$temp_config" "$output_config"
+    mv "${temp_config}.merged" "$output_config"
+    rm -f "$temp_config"
     check_status "创建合并配置文件 $output_config"
     
     # 调试：显示合并后的统计
     log_info "合并后的配置统计："
     log_info "  总行数: $(wc -l < "$output_config")"
     log_info "  luci包数: $(grep "^CONFIG_PACKAGE_luci-.*=y$" "$output_config" | wc -l)"
+    
+    # 调试：列出所有luci包
+    log_info "合并后的luci软件包列表："
+    grep "^CONFIG_PACKAGE_luci-.*=y$" "$output_config" 2>/dev/null | while read -r line; do
+        local pkg=$(echo "$line" | sed 's/^CONFIG_PACKAGE_//g' | sed 's/=y$//g')
+        log_info "  - $pkg"
+    done
 }
 
 # 计算文件哈希值
